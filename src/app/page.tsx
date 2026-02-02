@@ -55,10 +55,19 @@ export default function Dashboard() {
     }
   }, []);
 
-  // Poll API every 5 seconds
+  // Trigger tick and poll state every 5 seconds
   useEffect(() => {
-    fetchState();
-    const interval = setInterval(fetchState, 5000);
+    const runTick = async () => {
+      try {
+        await fetch('/api/tick', { method: 'POST' });
+      } catch (e) {
+        console.error('Tick failed:', e);
+      }
+      fetchState();
+    };
+
+    runTick(); // Initial tick
+    const interval = setInterval(runTick, 5000);
     return () => clearInterval(interval);
   }, [fetchState]);
 
@@ -229,6 +238,62 @@ export default function Dashboard() {
                 )}
               </tbody>
             </table>
+          </div>
+
+          {/* Strategic Trade Planning */}
+          <div className="glass-card" style={{ marginTop: '1.5rem' }}>
+            <h3 className="stat-label"><Zap size={16} style={{ marginBottom: '-3px', marginRight: '8px' }} /> Strategic Trade Planning</h3>
+            <div className="split-tables">
+              {/* LONG SETUPS */}
+              <div style={{ flex: 1 }}>
+                <p style={{ fontSize: '0.7rem', color: '#10b981', fontWeight: 700, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <TrendingUp size={12} /> BULLISH SETUPS (LONG)
+                </p>
+                <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #1e293b', borderRadius: '4px' }}>
+                  <table className="position-table">
+                    <thead style={{ position: 'sticky', top: 0, background: '#0f172a', zIndex: 1 }}>
+                      <tr><th>Symbol</th><th>LTP</th><th>Entry</th><th>Target</th><th>SL</th></tr>
+                    </thead>
+                    <tbody>
+                      {data.planned_trades?.filter((t: any) => t.side === 'LONG').slice(0, 10).map((trade: any, i: number) => (
+                        <tr key={`${trade.symbol}-LONG-${i}`}>
+                          <td style={{ fontWeight: 700 }}>{trade.symbol}</td>
+                          <td style={{ color: '#94a3b8' }}>₹{trade.current?.toFixed(2) || '--'}</td>
+                          <td style={{ color: '#10b981', fontWeight: 600 }}>₹{trade.entry}</td>
+                          <td style={{ color: '#34d399', fontSize: '0.75rem' }}>{trade.target}</td>
+                          <td style={{ color: '#f87171', fontSize: '0.75rem' }}>{trade.stop}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* SHORT SETUPS */}
+              <div style={{ flex: 1 }}>
+                <p style={{ fontSize: '0.7rem', color: '#ef4444', fontWeight: 700, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <TrendingUp size={12} style={{ transform: 'rotate(90deg)' }} /> BEARISH SETUPS (SHORT)
+                </p>
+                <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #1e293b', borderRadius: '4px' }}>
+                  <table className="position-table">
+                    <thead style={{ position: 'sticky', top: 0, background: '#0f172a', zIndex: 1 }}>
+                      <tr><th>Symbol</th><th>LTP</th><th>Entry</th><th>Target</th><th>SL</th></tr>
+                    </thead>
+                    <tbody>
+                      {data.planned_trades?.filter((t: any) => t.side === 'SHORT').slice(0, 10).map((trade: any, i: number) => (
+                        <tr key={`${trade.symbol}-SHORT-${i}`}>
+                          <td style={{ fontWeight: 700 }}>{trade.symbol}</td>
+                          <td style={{ color: '#94a3b8' }}>₹{trade.current?.toFixed(2) || '--'}</td>
+                          <td style={{ color: '#ef4444', fontWeight: 600 }}>₹{trade.entry}</td>
+                          <td style={{ color: '#34d399', fontSize: '0.75rem' }}>{trade.target}</td>
+                          <td style={{ color: '#f87171', fontSize: '0.75rem' }}>{trade.stop}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
