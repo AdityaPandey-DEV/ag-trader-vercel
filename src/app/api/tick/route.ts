@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getState, updateState, addLog, updateEquity } from '@/lib/state';
+import { fetchUpstoxQuotes, getUpstoxLoginUrl } from '@/lib/upstoxApi';
 import { generateMockData, getPriorData, updatePriorData, calculateLevels } from '@/lib/mockData';
 import { calculatePlannedTrade, generateSignal } from '@/lib/strategy';
 import { CONFIG } from '@/lib/config';
 import { isMarketOpen, getMarketInfo } from '@/lib/marketHours';
-import { fetchQuotes, isDhanConfigured, placeOrder, shouldAutoSquareOff, squareOffAll } from '@/lib/dhanApi';
+import { fetchQuotes, isDhanConfigured, placeOrder, shouldAutoSquareOff, squareOffAll, getFundLimits } from '@/lib/dhanApi';
 import {
     getTSDEngineState,
     updateTSDCount,
@@ -119,10 +120,23 @@ export async function POST() {
                 marketData = generateMockData(CONFIG.WATCHLIST);
                 dataSource = 'MOCK_FALLBACK';
             }
+        } else if (marketOpen && process.env.UPSTOX_API_KEY) {
+            // UPSTOX LIVE MODE
+            const upstoxData = await fetchUpstoxQuotes(CONFIG.WATCHLIST);
+            if (Object.keys(upstoxData).length > 0) {
+                marketData = upstoxData;
+                dataSource = 'UPSTOX_LIVE';
+            } else {
+                // Determine if we need to login
+                addLog('⚠️ Upstox data empty. Login might be required.');
+                // Fallback
+                marketData = generateMockData(CONFIG.WATCHLIST);
+                dataSource = 'MOCK_FALLBACK';
+            }
         } else {
-            // Market closed or Dhan not configured: Use mock data
+            // Market closed or No Broker: Use mock data
             marketData = generateMockData(CONFIG.WATCHLIST);
-            dataSource = marketOpen ? 'MOCK_NO_DHAN' : 'MOCK_MARKET_CLOSED';
+            dataSource = marketOpen ? 'MOCK_NO_BROKER' : 'MOCK_MARKET_CLOSED';
         }
 
         // 2. Update historical data for indicators
@@ -185,7 +199,7 @@ export async function POST() {
             plannedTrades.push(...trades);
 
             // Check for actionable signals (only during market hours with real data)
-            if (marketOpen && dataSource.includes('DHAN') && regimePermissions.allowMeanReversion) {
+            if (marketOpen && (dataSource.includes('DHAN') || dataSource.includes('UPSTOX')) && regimePermissions.allowMeanReversion) {
                 const signal = generateSignal(data, priorData, levels.support, levels.resistance, regimeResult.newRegime);
                 if (signal) {
                     signals.push(signal);
