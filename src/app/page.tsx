@@ -43,6 +43,7 @@ export default function Dashboard() {
   const [data, setData] = useState<TradingState | null>(null);
   const [capitalInput, setCapitalInput] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [showMarketBanner, setShowMarketBanner] = useState(true);
 
   // Fetch State from API
   const fetchState = useCallback(async () => {
@@ -115,11 +116,10 @@ export default function Dashboard() {
 
   return (
     <div className="dashboard-container">
-      {/* Market Status Banner */}
-      {data.market_status !== 'OPEN' && (
+      {/* Market Status Banner - Only in LIVE mode */}
+      {showMarketBanner && !data.paper_mode && (
         <div style={{
-          background: 'rgba(245, 158, 11, 0.1)',
-          border: '1px solid #f59e0b',
+          background: data.market_status === 'OPEN' ? '#10b981' : '#ef4444',
           borderRadius: '8px',
           padding: '12px 16px',
           marginBottom: '1rem',
@@ -127,12 +127,23 @@ export default function Dashboard() {
           alignItems: 'center',
           justifyContent: 'space-between'
         }}>
-          <span style={{ color: '#fbbf24', fontWeight: 700 }}>
-            ⏸️ MARKET {data.market_status || 'CLOSED'} - {data.market_message || 'Trading paused'}
+          <span style={{ color: '#fff', fontWeight: 700 }}>
+            {data.market_status === 'OPEN' ? '🟢 MARKET OPEN' : '🔴 MARKET CLOSED'} — {data.data_source || 'MOCK'}
           </span>
-          <span style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
-            Data: {data.data_source || 'MOCK'}
-          </span>
+          <button
+            onClick={() => setShowMarketBanner(false)}
+            style={{
+              background: 'rgba(255,255,255,0.2)',
+              border: 'none',
+              color: '#fff',
+              padding: '4px 10px',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontWeight: 700
+            }}
+          >
+            ✕
+          </button>
         </div>
       )}
 
