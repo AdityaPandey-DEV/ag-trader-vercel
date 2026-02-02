@@ -15,11 +15,12 @@ export async function GET() {
 
     // Determine data source indicator
     let dataSource = 'MOCK';
-    if (isMarketOpen() && dhanConfigured) {
-        dataSource = state.paper_mode ? 'DHAN_PAPER' : 'DHAN_LIVE';
+    if (dhanConfigured) {
+        // Always show Dhan connection if configured, regardless of market hours
+        dataSource = state.paper_mode ? 'PAPER' : 'DHAN_LIVE';
     }
 
-    // Fetch real balance from Dhan in LIVE mode
+    // Fetch real balance from Dhan in LIVE mode (even when market closed!)
     let effectiveCapital = state.initial_capital;
 
     if (!state.paper_mode && dhanConfigured) {
@@ -36,6 +37,10 @@ export async function GET() {
                 }
             } catch (e) {
                 console.error('Balance fetch error:', e);
+                // Use cached balance if fetch fails
+                if (cachedBalance > 0) {
+                    effectiveCapital = cachedBalance;
+                }
             }
         } else {
             effectiveCapital = cachedBalance;

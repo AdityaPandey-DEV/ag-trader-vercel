@@ -170,20 +170,25 @@ export default function Dashboard() {
             </div>
           )}
 
+          {/* Paper/Live Mode Toggle - Disabled when market closed */}
           <button
             onClick={togglePaperMode}
+            disabled={data.market_status !== 'OPEN' && data.paper_mode}
+            title={data.market_status !== 'OPEN' && data.paper_mode ? 'LIVE mode unavailable - Market is closed' : ''}
             style={{
-              backgroundColor: data.paper_mode ? 'rgba(16, 185, 129, 0.1)' : 'transparent',
+              backgroundColor: data.paper_mode ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
               borderWidth: '1px',
               borderStyle: 'solid',
-              borderColor: data.paper_mode ? '#10b981' : '#334155',
-              color: data.paper_mode ? '#10b981' : '#94a3b8',
+              borderColor: data.paper_mode ? '#10b981' : '#ef4444',
+              color: data.paper_mode ? '#10b981' : '#ef4444',
               display: 'flex', alignItems: 'center', gap: '8px',
-              padding: '8px 16px', borderRadius: '8px', cursor: 'pointer'
+              padding: '8px 16px', borderRadius: '8px', 
+              cursor: (data.market_status !== 'OPEN' && data.paper_mode) ? 'not-allowed' : 'pointer',
+              opacity: (data.market_status !== 'OPEN' && data.paper_mode) ? 0.5 : 1
             }}
           >
             <MousePointer2 size={16} />
-            {data.paper_mode ? 'PAPER MODE' : 'LIVE MODE'}
+            {data.paper_mode ? 'PAPER MODE' : '🔥 LIVE MODE'}
           </button>
 
           <button
