@@ -34,15 +34,29 @@ export async function POST() {
         // 3. Update prior data for next tick
         updatePriorData(marketData);
 
-        // 4. Simulate PnL movement (small random walk for demo)
-        const pnlChange = (Math.random() - 0.5) * 200;
-        const newPnl = state.pnl + pnlChange;
+        // 4. Calculate PnL from actual positions (should be 0 if no positions)
+        let totalPnl = 0;
+        const updatedPositions = state.positions.map(pos => {
+            const currentData = marketData[pos.symbol];
+            if (currentData) {
+                const current = currentData.close;
+                const pnl = pos.side === 'LONG'
+                    ? (current - pos.entry) * pos.qty
+                    : (pos.entry - current) * pos.qty;
+                return { ...pos, current, pnl };
+            }
+            return pos;
+        });
+        updatedPositions.forEach(p => totalPnl += p.pnl);
+
+        const newPnl = totalPnl; // Assign totalPnl to newPnl for consistency with existing state update
         const riskConsumed = Math.abs(newPnl) / state.initial_capital * 100;
 
         // 5. Update state
         updateState({
             pnl: Number(newPnl.toFixed(2)),
             risk_consumed: Number(riskConsumed.toFixed(4)),
+            positions: updatedPositions,
             planned_trades: plannedTrades,
             watchlist: CONFIG.WATCHLIST,
             current_symbol: CONFIG.WATCHLIST[Math.floor(Math.random() * CONFIG.WATCHLIST.length)]
