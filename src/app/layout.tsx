@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AG_TRADER | Algorithmic Trading Dashboard",
+  title: "Algo Trader | Algorithmic Trading Dashboard",
   description: "Real-time intraday trading system with AI-powered signal generation.",
 };
 

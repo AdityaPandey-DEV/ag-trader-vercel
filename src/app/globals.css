@@ -43,6 +43,7 @@ header {
   border-bottom: 1px solid var(--glass-border);
   flex-wrap: wrap;
   gap: 1rem;
+  min-height: 80px;
 }
 
 .title-section h1 {
@@ -101,7 +102,7 @@ header {
 }
 
 .chart-container {
-  height: 350px;
+  min-height: 300px;
   width: 100%;
   margin-top: 1rem;
 }

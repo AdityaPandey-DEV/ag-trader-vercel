@@ -149,7 +149,7 @@ export default function Dashboard() {
 
       <header>
         <div className="title-section">
-          <h1><Shield size={32} /> AG_TRADER <span className="badge badge-long">{data.regime}</span></h1>
+          <h1><Shield size={32} /> Algo Trader <span className="badge badge-long">{data.regime}</span></h1>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
@@ -240,8 +240,8 @@ export default function Dashboard() {
           <div className="glass-card">
             <h3 className="stat-label"><BarChart3 size={16} style={{ marginBottom: '-3px', marginRight: '8px' }} /> Session Equity Curve</h3>
             <div className="chart-container">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={data.equity_history || []}>
+              <ResponsiveContainer width="100%" height={300}>
+                <AreaChart data={data.equity_history && data.equity_history.length > 0 ? data.equity_history : [{ time: 'Now', equity: data.initial_capital }]}>
                   <defs>
                     <linearGradient id="colorEquity" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />

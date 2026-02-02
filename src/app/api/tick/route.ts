@@ -3,21 +3,97 @@ import { getState, updateState, addLog, updateEquity } from '@/lib/state';
 import { generateMockData, getPriorData, updatePriorData, calculateLevels } from '@/lib/mockData';
 import { calculatePlannedTrade, generateSignal } from '@/lib/strategy';
 import { CONFIG } from '@/lib/config';
-import { isMarketOpen, getMarketStatus, getMarketInfo } from '@/lib/marketHours';
-import { fetchQuotes, isDhanConfigured, placeOrder } from '@/lib/dhanApi';
+import { isMarketOpen, getMarketInfo } from '@/lib/marketHours';
+import { fetchQuotes, isDhanConfigured, placeOrder, shouldAutoSquareOff, squareOffAll } from '@/lib/dhanApi';
+import {
+    getTSDEngineState,
+    updateTSDCount,
+    getRegimePermissions,
+    getRegimeDisplayInfo,
+    processDailyMetrics
+} from '@/lib/regimeEngine';
+import { calculateSessionMetrics, OHLCV } from '@/lib/indicators';
+import { getStateMachine } from '@/lib/stateMachine';
+import { validateTradeSignal, calculateSafePositionSize } from '@/lib/riskGate';
+import {
+    saveHistoricalData,
+    loadHistoricalData,
+    saveRegimeState,
+    loadRegimeState,
+    saveTradingState,
+    incrementTickCount,
+    checkDailyReset,
+    performDailyReset
+} from '@/lib/storage';
+import { exportState as exportRegimeState, importState as importRegimeState } from '@/lib/regimeEngine';
+import { isAIConfigured, getCachedAnalysis, resolveConflict } from '@/lib/aiEngine';
+
+// Historical data cache for indicator calculations
+const historicalData: Record<string, OHLCV[]> = {};
+const MAX_HISTORY = 250; // Keep 250 candles for EMA(200)
 
 export async function POST() {
     const state = getState();
+    const stateMachine = getStateMachine();
 
     // Don't run if kill switch is active
     if (state.kill_switch) {
+        stateMachine.activateKillSwitch('Manual kill switch');
         return NextResponse.json({ status: 'halted', message: 'Kill switch active' });
     }
 
+    // Check if state machine allows trading
+    const canTrade = stateMachine.canOpenPosition();
+    if (!canTrade.allowed && stateMachine.getState() === 'HALTED_FOR_DAY') {
+        return NextResponse.json({ status: 'halted', message: canTrade.reason });
+    }
+
     try {
+        // Daily reset check
+        if (checkDailyReset()) {
+            performDailyReset();
+            addLog('📅 New trading day - state reset');
+        }
+
+        // Load persisted historical data if cache is empty
+        if (Object.keys(historicalData).length === 0) {
+            const savedHistory = loadHistoricalData();
+            if (savedHistory) {
+                Object.assign(historicalData, savedHistory);
+                addLog('📂 Loaded historical data from storage');
+            }
+        }
+
+        // Load persisted regime state
+        const savedRegime = loadRegimeState();
+        if (savedRegime) {
+            importRegimeState(savedRegime);
+        }
+
+        // Increment tick count
+        incrementTickCount();
+
         const marketInfo = getMarketInfo();
         const marketOpen = isMarketOpen();
         const dhanConfigured = isDhanConfigured();
+        const tsdState = getTSDEngineState();
+
+        // Auto square-off check (3:15 PM for intraday)
+        if (marketOpen && shouldAutoSquareOff()) {
+            const openPositions = stateMachine.getOpenPositions();
+            if (openPositions.length > 0) {
+                addLog('⏰ AUTO SQUARE-OFF TIME REACHED');
+                const result = await squareOffAll('Market close approaching', state.paper_mode);
+                addLog(`📊 Squared off ${result.closedCount} positions`);
+
+                // Close positions in state machine
+                for (const pos of openPositions) {
+                    const priceMap: Record<string, number> = {};
+                    priceMap[pos.symbol] = pos.current;
+                    stateMachine.updatePositionPrices(priceMap);
+                }
+            }
+        }
 
         // 1. Fetch market data (real or mock)
         let marketData: Record<string, any>;
@@ -49,7 +125,51 @@ export async function POST() {
             dataSource = marketOpen ? 'MOCK_NO_DHAN' : 'MOCK_MARKET_CLOSED';
         }
 
-        // 2. Calculate planned trades for each symbol
+        // 2. Update historical data for indicators
+        for (const symbol of CONFIG.WATCHLIST) {
+            const data = marketData[symbol];
+            if (!data) continue;
+
+            if (!historicalData[symbol]) {
+                historicalData[symbol] = [];
+            }
+
+            // Add new candle to history
+            const candle: OHLCV = {
+                symbol,
+                open: data.open,
+                high: data.high,
+                low: data.low,
+                close: data.close || data.lastPrice,
+                volume: data.volume,
+                timestamp: new Date()
+            };
+
+            historicalData[symbol].push(candle);
+
+            // Keep only MAX_HISTORY candles
+            if (historicalData[symbol].length > MAX_HISTORY) {
+                historicalData[symbol] = historicalData[symbol].slice(-MAX_HISTORY);
+            }
+        }
+
+        // 3. Calculate session metrics (for regime detection)
+        // Use aggregate of all symbols for overall market analysis
+        const allCandles = Object.values(historicalData).flat();
+        const sessionMetrics = calculateSessionMetrics(allCandles);
+
+        // 4. Update regime based on TSD
+        const regimeResult = processDailyMetrics(sessionMetrics);
+        const regimePermissions = getRegimePermissions(regimeResult.newRegime);
+        const regimeDisplay = getRegimeDisplayInfo(regimeResult.newRegime);
+
+        // Update state with regime info
+        updateState({
+            regime: regimeResult.newRegime,
+            tsd_count: regimeResult.newTSDCount
+        });
+
+        // 5. Calculate planned trades for each symbol
         const plannedTrades: any[] = [];
         const signals: any[] = [];
 
@@ -65,104 +185,177 @@ export async function POST() {
             plannedTrades.push(...trades);
 
             // Check for actionable signals (only during market hours with real data)
-            if (marketOpen && dataSource.includes('DHAN')) {
-                const signal = generateSignal(data, priorData, levels.support, levels.resistance, state.regime);
+            if (marketOpen && dataSource.includes('DHAN') && regimePermissions.allowMeanReversion) {
+                const signal = generateSignal(data, priorData, levels.support, levels.resistance, regimeResult.newRegime);
                 if (signal) {
                     signals.push(signal);
                 }
             }
         }
 
-        // 3. Execute trades on signals (PAPER mode simulates, LIVE mode executes)
-        if (signals.length > 0 && marketOpen) {
+        // 6. Update positions prices and check exits
+        const priceMap: Record<string, number> = {};
+        for (const symbol of CONFIG.WATCHLIST) {
+            const data = marketData[symbol];
+            if (data) {
+                priceMap[symbol] = data.close || data.lastPrice;
+            }
+        }
+
+        stateMachine.updatePositionPrices(priceMap);
+        const closedPositions = stateMachine.checkExits(priceMap);
+
+        if (closedPositions.length > 0) {
+            for (const msg of closedPositions) {
+                addLog(`📍 ${msg}`);
+            }
+        }
+
+        // 7. Execute trades on signals (with full risk validation)
+        if (signals.length > 0 && marketOpen && regimePermissions.tradingFrequency !== 'HALTED') {
+            const openPositions = stateMachine.getOpenPositions();
+
             for (const signal of signals.slice(0, 2)) { // Max 2 trades per tick
-                // Risk check: Max daily loss
-                if (Math.abs(state.pnl) >= CONFIG.MAX_DAILY_LOSS) {
-                    addLog('⚠️ MAX DAILY LOSS reached. Halting trades.');
-                    break;
+                // Full risk validation
+                const riskCheck = validateTradeSignal(
+                    {
+                        symbol: signal.symbol,
+                        side: signal.side,
+                        entry: signal.entry,
+                        stop: signal.stop,
+                        target: signal.target
+                    },
+                    state.initial_capital,
+                    state.pnl,
+                    regimeResult.newRegime,
+                    openPositions
+                );
+
+                if (!riskCheck.passed) {
+                    const failedChecks = riskCheck.checks.filter(c => !c.passed).map(c => c.name);
+                    addLog(`⚠️ BLOCKED ${signal.symbol}: ${failedChecks.join(', ')}`);
+                    continue;
                 }
 
-                // Calculate position size (fixed 1% risk per trade for now)
-                const riskAmount = state.initial_capital * 0.01;
-                const stopDistance = Math.abs(signal.entry - signal.stop);
-                const qty = Math.floor(riskAmount / stopDistance) || 1;
+                // AI Confirmation (optional - if configured)
+                let aiSizeMultiplier = 1.0;
+                if (isAIConfigured()) {
+                    const symbolCandles = historicalData[signal.symbol] || [];
+                    if (symbolCandles.length >= 10) {
+                        const aiResult = await getCachedAnalysis(signal.symbol, symbolCandles);
+                        const conflict = resolveConflict(signal.side, aiResult, regimeResult.newRegime);
+
+                        if (conflict.resolution === 'SKIP') {
+                            addLog(`🤖 AI SKIP: ${signal.symbol} - ${conflict.reason}`);
+                            continue;
+                        }
+
+                        if (conflict.resolution === 'REDUCE_SIZE') {
+                            aiSizeMultiplier = 0.5; // Reduce size by half
+                            addLog(`🤖 AI CAUTION: ${signal.symbol} - size reduced`);
+                        }
+                    }
+                }
+
+                // Calculate position size (regime-adjusted + AI-adjusted)
+                let qty = riskCheck.adjustedSize || calculateSafePositionSize(
+                    signal,
+                    state.initial_capital,
+                    regimeResult.newRegime
+                );
+                qty = Math.floor(qty * aiSizeMultiplier);
 
                 if (state.paper_mode) {
-                    // Paper trade: Add to positions without real execution
-                    const newPosition = {
+                    // Paper trade: Add to state machine
+                    const position = stateMachine.openPosition({
                         symbol: signal.symbol,
                         side: signal.side,
                         entry: signal.entry,
                         current: signal.entry,
-                        qty: qty,
-                        pnl: 0
-                    };
-                    updateState({
-                        positions: [...state.positions, newPosition]
+                        qty,
+                        pnl: 0,
+                        stopLoss: signal.stop,
+                        target: signal.target,
+                        regime: regimeResult.newRegime
                     });
-                    addLog(`📝 PAPER ${signal.side} ${signal.symbol} @ ₹${signal.entry} (Qty: ${qty})`);
+
+                    if (position) {
+                        addLog(`📝 PAPER ${signal.side} ${signal.symbol} @ ₹${signal.entry} (Qty: ${qty}) [${regimeResult.newRegime}]`);
+                    }
                 } else {
                     // LIVE trade: Execute through Dhan
                     const orderSide = signal.side === 'LONG' ? 'BUY' : 'SELL';
                     const order = await placeOrder(signal.symbol, orderSide, qty, 'MARKET', undefined, false);
 
                     if (order) {
-                        const newPosition = {
+                        const position = stateMachine.openPosition({
                             symbol: signal.symbol,
                             side: signal.side,
                             entry: signal.entry,
                             current: signal.entry,
-                            qty: qty,
-                            pnl: 0
-                        };
-                        updateState({
-                            positions: [...state.positions, newPosition]
+                            qty,
+                            pnl: 0,
+                            stopLoss: signal.stop,
+                            target: signal.target,
+                            regime: regimeResult.newRegime
                         });
-                        addLog(`🔥 LIVE ${signal.side} ${signal.symbol} @ ₹${signal.entry} (Order: ${order.orderId})`);
+
+                        if (position) {
+                            addLog(`🔥 LIVE ${signal.side} ${signal.symbol} @ ₹${signal.entry} (Order: ${order.orderId}) [${regimeResult.newRegime}]`);
+                        }
                     }
                 }
             }
         }
 
-        // 4. Update prior data for next tick
+        // 8. Update prior data for next tick
         updatePriorData(marketData);
 
-        // 5. Calculate PnL from actual positions
-        let totalPnl = 0;
-        const updatedPositions = state.positions.map(pos => {
-            const currentData = marketData[pos.symbol];
-            if (currentData) {
-                const current = currentData.close || currentData.lastPrice;
-                const pnl = pos.side === 'LONG'
-                    ? (current - pos.entry) * pos.qty
-                    : (pos.entry - current) * pos.qty;
-                return { ...pos, current, pnl: Number(pnl.toFixed(2)) };
-            }
-            return pos;
-        });
-        updatedPositions.forEach(p => totalPnl += p.pnl);
+        // 9. Calculate PnL from state machine positions
+        const managedPositions = stateMachine.getOpenPositions();
+        let totalPnl = managedPositions.reduce((sum, p) => sum + p.pnl, 0);
+
+        // Convert managed positions to display format
+        const displayPositions = managedPositions.map(p => ({
+            symbol: p.symbol,
+            side: p.side,
+            entry: p.entry,
+            current: p.current,
+            qty: p.qty,
+            pnl: p.pnl
+        }));
 
         const riskConsumed = Math.abs(totalPnl) / state.initial_capital * 100;
 
-        // 6. Update state
+        // 10. Get state machine summary
+        const stateSummary = stateMachine.getStateSummary();
+
+        // 11. Update state
         updateState({
             pnl: Number(totalPnl.toFixed(2)),
             risk_consumed: Number(riskConsumed.toFixed(4)),
-            positions: updatedPositions,
+            positions: displayPositions,
             planned_trades: plannedTrades,
             watchlist: CONFIG.WATCHLIST,
             current_symbol: CONFIG.WATCHLIST[Math.floor(Math.random() * CONFIG.WATCHLIST.length)]
         });
 
-        // 7. Update equity curve
+        // 12. Update equity curve
         updateEquity();
 
-        // 8. Log activity (less frequently to avoid spam)
+        // 13. Persist data periodically (every 10 ticks)
         const now = Date.now();
+        if (now % 10 === 0) {
+            saveTradingState(getState());
+            saveRegimeState(exportRegimeState());
+            saveHistoricalData(historicalData);
+        }
+
+        // 14. Log activity (less frequently to avoid spam)
         if (plannedTrades.length > 0 && now % 30000 < 5000) { // Roughly every 30s
             const longCount = plannedTrades.filter(t => t.side === 'LONG').length;
             const shortCount = plannedTrades.filter(t => t.side === 'SHORT').length;
-            addLog(`SCAN: ${longCount} Long, ${shortCount} Short | ${dataSource} | ${marketInfo.status}`);
+            addLog(`SCAN: ${longCount}L/${shortCount}S | ${regimeDisplay.label} | TSD:${regimeResult.newTSDCount} | ${dataSource}`);
         }
 
         return NextResponse.json({
@@ -170,8 +363,12 @@ export async function POST() {
             tick_time: new Date().toLocaleTimeString('en-IN'),
             market_status: marketInfo.status,
             data_source: dataSource,
+            regime: regimeResult.newRegime,
+            tsd_count: regimeResult.newTSDCount,
             signals_count: signals.length,
-            positions_count: state.positions.length
+            positions_count: managedPositions.length,
+            system_state: stateSummary.state,
+            can_trade: stateSummary.canTrade
         });
 
     } catch (e) {
