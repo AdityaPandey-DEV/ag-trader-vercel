@@ -1,0 +1,17 @@
+name: Trading Tick Cron
+
+on:
+  schedule:
+    # Run every 5 minutes
+    - cron: '*/5 * * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Trading Engine
+        run: |
+          # Replace with your actual deployed URL
+          curl -X POST https://algo-trader-delta.vercel.app/api/tick \
+          -H "Content-Type: application/json"
