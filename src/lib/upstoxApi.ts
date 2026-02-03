@@ -1,24 +1,38 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { saveToken as saveTokenToRedis, loadToken as loadTokenFromRedis } from './redis';
 
 const UPSTOX_API_KEY = process.env.UPSTOX_API_KEY!;
 const UPSTOX_API_SECRET = process.env.UPSTOX_API_SECRET!;
 const UPSTOX_REDIRECT_URI = process.env.UPSTOX_REDIRECT_URI || 'http://localhost:3000/api/upstox/callback';
 
-// Token persistence path (works on Vercel /tmp)
+// Token persistence path (fallback for local dev)
 const TOKEN_FILE_PATH = path.join('/tmp', 'upstox_token.json');
 
 // In-memory cache (fast access)
 let accessToken: string | null = null;
 let tokenExpiry: number | null = null;
+let redisCheckDone = false;
 
 /**
- * Load token from file if not in memory
+ * Load token from Redis first, then file fallback
  */
-function loadTokenFromFile(): void {
+async function loadTokenAsync(): Promise<void> {
     if (accessToken) return; // Already in memory
 
+    // Try Redis first
+    try {
+        const redisToken = await loadTokenFromRedis();
+        if (redisToken) {
+            accessToken = redisToken;
+            return;
+        }
+    } catch (e) {
+        console.error('Redis load failed, trying file fallback:', e);
+    }
+
+    // File fallback
     try {
         if (fs.existsSync(TOKEN_FILE_PATH)) {
             const data = JSON.parse(fs.readFileSync(TOKEN_FILE_PATH, 'utf-8'));
@@ -27,7 +41,6 @@ function loadTokenFromFile(): void {
                 tokenExpiry = data.expiry;
                 console.log('✅ Loaded Upstox token from file storage');
             } else {
-                // Token expired, clean up
                 fs.unlinkSync(TOKEN_FILE_PATH);
             }
         }
@@ -37,18 +50,46 @@ function loadTokenFromFile(): void {
 }
 
 /**
- * Save token to file for persistence
+ * Sync version for backwards compatibility (checks file only)
  */
-function saveTokenToFile(token: string): void {
+function loadTokenFromFile(): void {
+    if (accessToken) return;
+
     try {
-        // Token valid for 24 hours (Upstox standard)
-        const expiry = Date.now() + 24 * 60 * 60 * 1000;
-        fs.writeFileSync(TOKEN_FILE_PATH, JSON.stringify({ token, expiry }));
-        accessToken = token;
-        tokenExpiry = expiry;
+        if (fs.existsSync(TOKEN_FILE_PATH)) {
+            const data = JSON.parse(fs.readFileSync(TOKEN_FILE_PATH, 'utf-8'));
+            if (data.token && data.expiry && Date.now() < data.expiry) {
+                accessToken = data.token;
+                tokenExpiry = data.expiry;
+            } else {
+                fs.unlinkSync(TOKEN_FILE_PATH);
+            }
+        }
+    } catch (e) {
+        // Silent fail
+    }
+}
+
+/**
+ * Save token to Redis (primary) and file (fallback)
+ */
+async function saveTokenToStorage(token: string): Promise<void> {
+    accessToken = token;
+    tokenExpiry = Date.now() + 24 * 60 * 60 * 1000;
+
+    // Save to Redis (primary)
+    try {
+        await saveTokenToRedis(token);
+    } catch (e) {
+        console.error('Redis save failed:', e);
+    }
+
+    // Also save to file (fallback)
+    try {
+        fs.writeFileSync(TOKEN_FILE_PATH, JSON.stringify({ token, expiry: tokenExpiry }));
         console.log('💾 Saved Upstox token to file storage');
     } catch (e) {
-        console.error('Failed to save token to file:', e);
+        console.error('File save failed:', e);
     }
 }
 
@@ -97,8 +138,8 @@ export async function handleUpstoxCallback(code: string): Promise<string> {
         }
 
         if (json.access_token) {
-            // Save to both memory and file
-            saveTokenToFile(json.access_token);
+            // Save to Redis (primary) and file (fallback)
+            await saveTokenToStorage(json.access_token);
             console.log('✅ Upstox Login Successful. Token:', json.access_token.substring(0, 10) + '...');
             return json.access_token;
         } else {
@@ -123,8 +164,8 @@ export function isUpstoxAuthenticated(): boolean {
  * Fetch LTP for a list of symbols
  */
 export async function fetchUpstoxQuotes(symbols: string[]) {
-    // Try to load token from file if not in memory (cold start recovery)
-    loadTokenFromFile();
+    // Try to load token from Redis/file if not in memory (cold start recovery)
+    await loadTokenAsync();
 
     if (!accessToken) {
         // console.warn('⚠️ No Upstox access token. Login required.');
