@@ -317,3 +317,46 @@ export async function fetchUpstoxFullQuotes(symbols: string[]) {
         return {};
     }
 }
+
+/**
+ * Fetch Upstox Account Balance
+ */
+export async function getUpstoxBalance(): Promise<number | null> {
+    await loadTokenAsync();
+
+    if (!accessToken) {
+        console.warn('No Upstox token for balance fetch');
+        return null;
+    }
+
+    try {
+        const url = 'https://api.upstox.com/v2/user/get-funds-and-margin';
+
+        const response = await fetch(url, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Accept': 'application/json'
+            }
+        });
+
+        if (!response.ok) {
+            console.error('Upstox balance error:', response.statusText);
+            return null;
+        }
+
+        const json = await response.json();
+
+        // Extract available margin from equity segment
+        if (json.data?.equity) {
+            const equity = json.data.equity;
+            const availableBalance = equity.available_margin || equity.used_margin || 0;
+            console.log('✅ Upstox Balance:', availableBalance);
+            return availableBalance;
+        }
+
+        return null;
+    } catch (error) {
+        console.error('Error fetching Upstox balance:', error);
+        return null;
+    }
+}

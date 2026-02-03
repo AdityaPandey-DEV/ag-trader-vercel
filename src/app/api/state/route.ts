@@ -94,8 +94,10 @@ export async function GET() {
         market_status: marketInfo.status,
         market_message: marketInfo.message,
         data_source: dataSource,
+        broker_mode: state.broker_mode,
+        broker_balance: state.broker_balance,
         dhan_configured: dhanConfigured,
-        has_upstox_token: await isUpstoxAuthenticatedAsync(), // DEBUG: Check if token exists
-        quotes: quotes // Return the Upstox quotes
+        has_upstox_token: await isUpstoxAuthenticatedAsync(),
+        quotes: quotes
     });
 }

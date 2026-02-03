@@ -10,6 +10,8 @@ import {
 } from 'lucide-react';
 
 // Types
+type BrokerMode = 'PAPER' | 'DHAN' | 'UPSTOX';
+
 interface TradingState {
   pnl: number;
   risk_consumed: number;
@@ -17,6 +19,8 @@ interface TradingState {
   regime: string;
   tsd_count: number;
   paper_mode: boolean;
+  broker_mode?: BrokerMode;
+  broker_balance?: number;
   initial_capital: number;
   kill_switch: boolean;
   current_symbol: string;
@@ -29,6 +33,7 @@ interface TradingState {
   market_message?: string;
   data_source?: string;
   dhan_configured?: boolean;
+  has_upstox_token?: boolean;
   quotes?: Record<string, { close: number; change: number; changePercent: number }>;
 }
 
@@ -45,6 +50,9 @@ export default function Dashboard() {
   const [capitalInput, setCapitalInput] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [showMarketBanner, setShowMarketBanner] = useState(true);
+  const [showBrokerDropdown, setShowBrokerDropdown] = useState(false);
+  const [editingBalance, setEditingBalance] = useState(false);
+  const [balanceInput, setBalanceInput] = useState("");
 
   // Fetch State from API
   const fetchState = useCallback(async () => {
@@ -82,12 +90,25 @@ export default function Dashboard() {
     fetchState();
   };
 
-  const togglePaperMode = async () => {
-    await fetch('/api/toggle_paper', {
+  const changeBroker = async (broker: BrokerMode) => {
+    await fetch('/api/broker', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: !data?.paper_mode })
+      body: JSON.stringify({ broker })
     });
+    setShowBrokerDropdown(false);
+    fetchState();
+  };
+
+  const updatePaperBalance = async () => {
+    if (!balanceInput) return;
+    await fetch('/api/broker', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paper_balance: parseFloat(balanceInput) })
+    });
+    setEditingBalance(false);
+    setBalanceInput("");
     fetchState();
   };
 
@@ -133,24 +154,77 @@ export default function Dashboard() {
           <div className="status-pill live">
             <span className="dot"></span> {data.market_status === 'OPEN' ? 'MARKET OPEN' : 'MARKET CLOSED'}
           </div>
-          <button className="mode-toggle" onClick={togglePaperMode}>
-            {data.paper_mode ? '📝 PAPER TRADING' : '🔥 LIVE EXECUTION'}
-          </button>
+
+          {/* Balance Display */}
+          <div className="balance-display">
+            <Coins size={16} />
+            {editingBalance && data.broker_mode === 'PAPER' ? (
+              <div className="balance-edit">
+                <input
+                  type="number"
+                  value={balanceInput}
+                  onChange={(e) => setBalanceInput(e.target.value)}
+                  placeholder={String(data.broker_balance || 100000)}
+                  className="balance-input"
+                />
+                <button onClick={updatePaperBalance} className="balance-save">✓</button>
+                <button onClick={() => setEditingBalance(false)} className="balance-cancel">✕</button>
+              </div>
+            ) : (
+              <>
+                <span className="balance-amount">₹{(data.broker_balance || data.initial_capital).toLocaleString('en-IN')}</span>
+                {data.broker_mode === 'PAPER' && (
+                  <button onClick={() => setEditingBalance(true)} className="balance-edit-btn" title="Edit Balance">✏️</button>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Broker Selector */}
+          <div className="broker-selector">
+            <button
+              className={`broker-btn ${data.broker_mode || 'PAPER'}`}
+              onClick={() => setShowBrokerDropdown(!showBrokerDropdown)}
+            >
+              {data.broker_mode === 'PAPER' && '📝 Paper Trade'}
+              {data.broker_mode === 'DHAN' && '🏦 Dhan'}
+              {data.broker_mode === 'UPSTOX' && '📊 Upstox'}
+              {!data.broker_mode && '📝 Paper Trade'}
+              <span className="dropdown-arrow">▼</span>
+            </button>
+
+            {showBrokerDropdown && (
+              <div className="broker-dropdown">
+                <button
+                  className={`broker-option ${data.broker_mode === 'PAPER' ? 'active' : ''}`}
+                  onClick={() => changeBroker('PAPER')}
+                >
+                  📝 Paper Trade
+                  <span className="broker-status connected">Always Available</span>
+                </button>
+                <button
+                  className={`broker-option ${data.broker_mode === 'DHAN' ? 'active' : ''} ${!data.dhan_configured ? 'disabled' : ''}`}
+                  onClick={() => data.dhan_configured && changeBroker('DHAN')}
+                >
+                  🏦 Dhan
+                  <span className={`broker-status ${data.dhan_configured ? 'connected' : 'disconnected'}`}>
+                    {data.dhan_configured ? 'Connected' : 'Not Configured'}
+                  </span>
+                </button>
+                <button
+                  className={`broker-option ${data.broker_mode === 'UPSTOX' ? 'active' : ''}`}
+                  onClick={() => data.has_upstox_token ? changeBroker('UPSTOX') : window.location.href = '/api/upstox/login'}
+                >
+                  📊 Upstox
+                  <span className={`broker-status ${data.has_upstox_token ? 'connected' : 'disconnected'}`}>
+                    {data.has_upstox_token ? 'Connected' : 'Click to Login'}
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
-
-      {/* UPSTOX CONNECTION STATUS BANNER */}
-      {data.data_source && !data.data_source.includes('UPSTOX') && data.data_source !== 'NO_DATA' && (
-        <div className="upstox-banner">
-          <span className="banner-icon">⚠️</span>
-          <span className="banner-text">
-            Upstox Not Connected — Using {data.data_source.replace('_', ' ')} data
-          </span>
-          <a href="/api/upstox/login" className="banner-link">
-            🔗 Click to Login
-          </a>
-        </div>
-      )}
 
       {/* CRITICAL: NO DATA AVAILABLE BANNER */}
       {data.data_source === 'NO_DATA' && (

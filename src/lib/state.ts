@@ -23,6 +23,8 @@ export interface PlannedTrade {
     current?: number;
 }
 
+export type BrokerMode = 'PAPER' | 'DHAN' | 'UPSTOX';
+
 export interface TradingState {
     // Core metrics
     pnl: number;
@@ -33,8 +35,10 @@ export interface TradingState {
     regime: MarketRegime | string;
     tsd_count: number;
 
-    // Mode controls
-    paper_mode: boolean;
+    // Broker & Mode controls
+    broker_mode: BrokerMode;
+    broker_balance: number;
+    paper_mode: boolean; // Deprecated - use broker_mode === 'PAPER'
     initial_capital: number;
     kill_switch: boolean;
 
@@ -58,6 +62,8 @@ const initialState: TradingState = {
     max_drawdown: 1.5,
     regime: 'RANGE_NEUTRAL',
     tsd_count: 0,
+    broker_mode: 'PAPER',
+    broker_balance: 100000,
     paper_mode: true,
     initial_capital: 100000,
     kill_switch: false,
@@ -134,4 +140,18 @@ export function getRiskConsumed(): number {
 
 export function isKillSwitchActive(): boolean {
     return state.kill_switch;
+}
+
+export function setBrokerMode(mode: BrokerMode) {
+    state.broker_mode = mode;
+    state.paper_mode = mode === 'PAPER';
+    addLog(`🔄 Switched to ${mode} broker`);
+}
+
+export function updateBrokerBalance(balance: number) {
+    state.broker_balance = balance;
+}
+
+export function getBrokerMode(): BrokerMode {
+    return state.broker_mode;
 }
