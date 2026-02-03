@@ -1,7 +1,7 @@
 
 import { NextResponse } from 'next/server';
 import { loadToken, hasToken } from '@/lib/redis';
-import { isUpstoxAuthenticatedAsync } from '@/lib/upstoxApi';
+import { isUpstoxAuthenticatedAsync, getUpstoxBalance } from '@/lib/upstoxApi';
 import { isDhanConfigured, getBalance as getDhanBalance } from '@/lib/dhanApi';
 
 export async function GET() {
@@ -89,7 +89,11 @@ export async function GET() {
             memory: {
                 isAuthenticated: inMemoryAuth
             },
-            upstox: upstoxEnvVars,
+            upstox: {
+                ...upstoxEnvVars,
+                hasRedisToken: hasRedisToken,
+                balance: inMemoryAuth ? await getUpstoxBalance() : 'Not authenticated'
+            },
             timestamp: new Date().toISOString()
         });
     } catch (error) {
