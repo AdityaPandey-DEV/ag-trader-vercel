@@ -3,10 +3,20 @@
  * Provides reliable market data when Upstox/Dhan are unavailable.
  */
 
-import YahooFinance from 'yahoo-finance2';
+import yahooFinance from 'yahoo-finance2';
 
-// Create the YahooFinance instance
-const yahooFinance = new YahooFinance();
+// Type for Yahoo Finance quote response (subset of fields we use)
+interface YahooFinanceQuote {
+    symbol: string;
+    regularMarketPrice?: number;
+    regularMarketOpen?: number;
+    regularMarketDayHigh?: number;
+    regularMarketDayLow?: number;
+    regularMarketPreviousClose?: number;
+    regularMarketChange?: number;
+    regularMarketChangePercent?: number;
+    regularMarketVolume?: number;
+}
 
 export interface YahooQuote {
     symbol: string;
@@ -36,10 +46,11 @@ export async function fetchYahooQuotes(symbols: string[]): Promise<Record<string
     try {
         const yahooSymbols = symbols.map(toYahooSymbol);
 
-        // Use quoteSummary for each symbol (more reliable than batch quote)
-        const quotePromises = yahooSymbols.map(async (yahooSymbol) => {
+        // Use quote for each symbol
+        const quotePromises = yahooSymbols.map(async (yahooSymbol): Promise<YahooFinanceQuote | null> => {
             try {
-                const quote: any = await yahooFinance.quote(yahooSymbol);
+                // yahoo-finance2 v3 uses default export directly
+                const quote = await yahooFinance.quote(yahooSymbol) as YahooFinanceQuote;
                 return quote;
             } catch (e) {
                 console.error(`Yahoo Finance error for ${yahooSymbol}:`, e);
@@ -47,7 +58,7 @@ export async function fetchYahooQuotes(symbols: string[]): Promise<Record<string
             }
         });
 
-        const quotes: any[] = await Promise.all(quotePromises);
+        const quotes = await Promise.all(quotePromises);
 
         for (const quote of quotes) {
             if (!quote || !quote.symbol) continue;
@@ -68,6 +79,7 @@ export async function fetchYahooQuotes(symbols: string[]): Promise<Record<string
             };
         }
 
+        console.log(`✅ Yahoo Finance: Fetched ${Object.keys(result).length}/${symbols.length} quotes`);
         return result;
     } catch (error) {
         console.error('Yahoo Finance fetch error:', error);

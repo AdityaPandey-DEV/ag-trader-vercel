@@ -142,10 +142,17 @@ export async function POST() {
             dataSource = 'DHAN_LIVE';
 
             if (Object.keys(marketData).length === 0) {
-                // Fallback to mock if Dhan fails
-                marketData = generateMockData(CONFIG.WATCHLIST);
-                dataSource = 'MOCK_FALLBACK';
-                addLog('⚠️ Dhan API failed, using mock data');
+                // Fallback to Yahoo Finance if Dhan fails
+                const yahooData = await fetchYahooQuotes(CONFIG.WATCHLIST);
+                if (Object.keys(yahooData).length > 0) {
+                    marketData = transformYahooToOHLCV(yahooData);
+                    dataSource = 'YAHOO_FINANCE';
+                    addLog('⚠️ Dhan API failed, using Yahoo Finance');
+                } else {
+                    marketData = {};
+                    dataSource = 'NO_DATA';
+                    addLog('⚠️ CRITICAL: All data sources failed - Trading disabled');
+                }
             }
         } else if (marketOpen && dhanConfigured && state.paper_mode) {
             // PAPER MODE: Real prices from Dhan, but simulated trades
@@ -153,8 +160,15 @@ export async function POST() {
             dataSource = 'DHAN_PAPER';
 
             if (Object.keys(marketData).length === 0) {
-                marketData = generateMockData(CONFIG.WATCHLIST);
-                dataSource = 'MOCK_FALLBACK';
+                const yahooData = await fetchYahooQuotes(CONFIG.WATCHLIST);
+                if (Object.keys(yahooData).length > 0) {
+                    marketData = transformYahooToOHLCV(yahooData);
+                    dataSource = 'YAHOO_FINANCE';
+                } else {
+                    marketData = {};
+                    dataSource = 'NO_DATA';
+                    addLog('⚠️ CRITICAL: All data sources failed - Trading disabled');
+                }
             }
         } else if (process.env.UPSTOX_API_KEY) {
             // UPSTOX LIVE DATA (Always try to fetch if configured, even if market closed)
