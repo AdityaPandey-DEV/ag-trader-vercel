@@ -19,75 +19,68 @@ export async function GET() {
 
     // Determine data source indicator
     let dataSource = 'MOCK';
-
     if (hasUpstoxToken) {
         dataSource = state.broker_mode === 'PAPER' ? 'UPSTOX_PAPER' : 'UPSTOX_LIVE';
     } else if (dhanConfigured) {
         dataSource = state.broker_mode === 'PAPER' ? 'PAPER' : 'DHAN_LIVE';
     }
 
-    // Fetch live broker balance based on broker_mode
+    // Fetch live broker balances (Parallel Execution)
+    const now = Date.now();
+    let shouldFetch = now - lastBalanceFetch > BALANCE_CACHE_MS;
+
+    // Always fetch both if configured
+    const promises: Promise<any>[] = [];
+
+    // 1. Dhan Fetch
+    if (dhanConfigured && shouldFetch) {
+        promises.push(
+            getDhanBalance().then(res => {
+                if (res?.available !== undefined && res.available !== null) {
+                    cachedDhanBalance = res.available;
+                    console.log(`💰 Dhan Balance: ₹${res.available.toLocaleString()}`);
+                }
+            }).catch(e => console.error('Dhan fetch error:', e))
+        );
+    }
+
+    // 2. Upstox Fetch
+    if (hasUpstoxToken && shouldFetch) {
+        promises.push(
+            getUpstoxBalance().then(bal => {
+                if (bal !== null) {
+                    cachedUpstoxBalance = bal;
+                    console.log(`💰 Upstox Balance: ₹${bal.toLocaleString()}`);
+                }
+            }).catch(e => console.error('Upstox fetch error:', e))
+        );
+    }
+
+    // Wait for all fetches
+    if (promises.length > 0) {
+        await Promise.all(promises);
+        lastBalanceFetch = now;
+    }
+
+    // Determine current active balance
     let brokerBalance = state.broker_balance;
     let effectiveCapital = state.initial_capital;
-    const now = Date.now();
 
-    // Only fetch if cache expired
-    if (now - lastBalanceFetch > BALANCE_CACHE_MS) {
-        lastBalanceFetch = now;
-
-        // DHAN Balance
-        if (state.broker_mode === 'DHAN' && dhanConfigured) {
-            try {
-                const balanceResult = await getDhanBalance();
-                const realBalance = balanceResult?.available ?? null;
-
-                if (realBalance !== null) {
-                    cachedDhanBalance = realBalance;
-                    brokerBalance = realBalance;
-                    effectiveCapital = realBalance;
-                    updateBrokerBalance(realBalance);
-                    initRiskEngine(realBalance);
-                    console.log(`💰 Dhan Balance: ₹${realBalance.toLocaleString()}`);
-                }
-            } catch (e) {
-                console.error('Dhan balance fetch error:', e);
-                if (cachedDhanBalance > 0) {
-                    brokerBalance = cachedDhanBalance;
-                    effectiveCapital = cachedDhanBalance;
-                }
-            }
-        }
-
-        // UPSTOX Balance
-        if (state.broker_mode === 'UPSTOX' && hasUpstoxToken) {
-            try {
-                const realBalance = await getUpstoxBalance();
-
-                if (realBalance !== null) {
-                    cachedUpstoxBalance = realBalance;
-                    brokerBalance = realBalance;
-                    effectiveCapital = realBalance;
-                    updateBrokerBalance(realBalance);
-                    initRiskEngine(realBalance);
-                    console.log(`💰 Upstox Balance: ₹${realBalance.toLocaleString()}`);
-                }
-            } catch (e) {
-                console.error('Upstox balance fetch error:', e);
-                if (cachedUpstoxBalance > 0) {
-                    brokerBalance = cachedUpstoxBalance;
-                    effectiveCapital = cachedUpstoxBalance;
-                }
-            }
-        }
-    } else {
-        // Use cached balance
-        if (state.broker_mode === 'DHAN' && cachedDhanBalance > 0) {
-            brokerBalance = cachedDhanBalance;
-            effectiveCapital = cachedDhanBalance;
-        } else if (state.broker_mode === 'UPSTOX' && cachedUpstoxBalance > 0) {
-            brokerBalance = cachedUpstoxBalance;
-            effectiveCapital = cachedUpstoxBalance;
-        }
+    if (state.broker_mode === 'DHAN' && cachedDhanBalance !== undefined) {
+        brokerBalance = cachedDhanBalance;
+        effectiveCapital = cachedDhanBalance;
+        // Update state with latest real balance
+        updateBrokerBalance(cachedDhanBalance);
+        initRiskEngine(cachedDhanBalance);
+    } else if (state.broker_mode === 'UPSTOX' && cachedUpstoxBalance !== undefined) {
+        brokerBalance = cachedUpstoxBalance;
+        effectiveCapital = cachedUpstoxBalance;
+        updateBrokerBalance(cachedUpstoxBalance);
+        initRiskEngine(cachedUpstoxBalance);
+    } else if (state.broker_mode === 'PAPER') {
+        // For PAPER, use stored state
+        // brokerBalance is already state.broker_balance
+        effectiveCapital = state.initial_capital;
     }
 
     // NEW: Fetch live quotes using UPSTOX (User's preferred data source)
@@ -123,6 +116,13 @@ export async function GET() {
         data_source: dataSource,
         broker_mode: state.broker_mode,
         broker_balance: brokerBalance,
+        // Send ALL balances to frontend for instant switching
+        // Send ALL balances to frontend for instant switching
+        all_balances: {
+            PAPER: 100000, // Default for paper trade
+            DHAN: cachedDhanBalance,
+            UPSTOX: cachedUpstoxBalance
+        },
         dhan_configured: dhanConfigured,
         has_upstox_token: hasUpstoxToken,
         quotes: quotes

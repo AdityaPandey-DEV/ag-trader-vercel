@@ -35,6 +35,7 @@ interface TradingState {
   dhan_configured?: boolean;
   has_upstox_token?: boolean;
   quotes?: Record<string, { close: number; change: number; changePercent: number }>;
+  all_balances?: { PAPER: number; DHAN: number; UPSTOX: number };
 }
 
 // Initial Mock State
@@ -109,7 +110,8 @@ export default function Dashboard() {
     setData(prev => prev ? {
       ...prev,
       broker_mode: broker,
-      // Optional: Reset balance for visual feedback or keep old until fetch 
+      // Instant Balance Switch using cached data
+      broker_balance: prev.all_balances ? prev.all_balances[broker] : (broker === 'PAPER' ? 100000 : 0)
     } : null);
 
     // 3. API Call
