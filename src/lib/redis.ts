@@ -49,17 +49,19 @@ const UPSTOX_TOKEN_KEY = 'upstox:access_token';
 const UPSTOX_EXPIRY_KEY = 'upstox:token_expiry';
 
 /**
- * Save Upstox token to Redis with 24-hour expiry
+ * Save token to Redis with 24-hour expiry
+ * @param token - The token to save
+ * @param key - Optional custom key (defaults to Upstox token)
  */
-export async function saveToken(token: string): Promise<boolean> {
+export async function saveToken(token: string, key: string = UPSTOX_TOKEN_KEY): Promise<boolean> {
     const client = getRedis();
     if (!client) return false;
 
     try {
         const expiry = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
-        await client.set(UPSTOX_TOKEN_KEY, token, { ex: 86400 }); // 24h TTL
-        await client.set(UPSTOX_EXPIRY_KEY, expiry.toString(), { ex: 86400 });
-        console.log('💾 Saved Upstox token to Redis');
+        await client.set(key, token, { ex: 86400 }); // 24h TTL
+        await client.set(`${key}:expiry`, expiry.toString(), { ex: 86400 });
+        console.log(`💾 Saved token to Redis: ${key}`);
         return true;
     } catch (e) {
         console.error('Redis save error:', e);
@@ -68,16 +70,17 @@ export async function saveToken(token: string): Promise<boolean> {
 }
 
 /**
- * Load Upstox token from Redis
+ * Load token from Redis
+ * @param key - Optional custom key (defaults to Upstox token)
  */
-export async function loadToken(): Promise<string | null> {
+export async function loadToken(key: string = UPSTOX_TOKEN_KEY): Promise<string | null> {
     const client = getRedis();
     if (!client) return null;
 
     try {
-        const token = await client.get<string>(UPSTOX_TOKEN_KEY);
+        const token = await client.get<string>(key);
         if (token) {
-            console.log('✅ Loaded Upstox token from Redis');
+            console.log(`✅ Loaded token from Redis: ${key}`);
             return token;
         }
         return null;

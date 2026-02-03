@@ -3,25 +3,118 @@
 
 import { addLog } from './state';
 import { getMarketInfo } from './marketHours';
+import { saveToken, loadToken } from './redis';
 
 // Dhan API Configuration
 const DHAN_BASE_URL = 'https://api.dhan.co';
 const DHAN_CLIENT_ID = process.env.DHAN_CLIENT_ID || '';
 const DHAN_ACCESS_TOKEN = process.env.DHAN_ACCESS_TOKEN || '';
 
+// Token caching
+let cachedToken: string | null = null;
+let tokenLoadedFromRedis = false;
+
 /**
  * Check if Dhan is configured
  */
 export function isDhanConfigured(): boolean {
-    return !!(DHAN_CLIENT_ID && DHAN_ACCESS_TOKEN);
+    return !!(DHAN_CLIENT_ID && (DHAN_ACCESS_TOKEN || cachedToken));
+}
+
+/**
+ * Get the current access token (refresh if needed)
+ */
+async function getAccessToken(): Promise<string | null> {
+    // Priority: Cached token > Redis token > Env token
+    if (cachedToken) return cachedToken;
+
+    // Try loading from Redis (for persistence across cold starts)
+    if (!tokenLoadedFromRedis) {
+        try {
+            const redisToken = await loadToken('dhan_access_token');
+            if (redisToken) {
+                cachedToken = redisToken;
+                tokenLoadedFromRedis = true;
+                console.log('🔑 Loaded Dhan token from Redis');
+                return cachedToken;
+            }
+        } catch (e) {
+            console.error('Failed to load Dhan token from Redis:', e);
+        }
+        tokenLoadedFromRedis = true;
+    }
+
+    // Fallback to environment variable
+    if (DHAN_ACCESS_TOKEN) {
+        cachedToken = DHAN_ACCESS_TOKEN;
+        return cachedToken;
+    }
+
+    return null;
+}
+
+/**
+ * Refresh the access token using RenewToken API
+ */
+async function refreshAccessToken(): Promise<boolean> {
+    const currentToken = await getAccessToken();
+    if (!currentToken || !DHAN_CLIENT_ID) {
+        console.error('Cannot refresh: no current token or client ID');
+        return false;
+    }
+
+    try {
+        console.log('🔄 Refreshing Dhan access token...');
+
+        const response = await fetch(`${DHAN_BASE_URL}/v2/RenewToken`, {
+            method: 'POST',
+            headers: {
+                'access-token': currentToken,
+                'dhanClientId': DHAN_CLIENT_ID,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            if (data.accessToken) {
+                cachedToken = data.accessToken;
+                // Persist to Redis for cross-invocation access
+                if (cachedToken) {
+                    await saveToken(cachedToken, 'dhan_access_token');
+                }
+                console.log('✅ Dhan token refreshed successfully');
+                return true;
+            }
+        } else {
+            const error = await response.text();
+            console.error('Token refresh failed:', response.status, error);
+        }
+    } catch (e) {
+        console.error('Token refresh error:', e);
+    }
+
+    return false;
 }
 
 /**
  * Get Dhan API headers
  */
+async function getHeadersAsync(): Promise<Record<string, string>> {
+    const token = await getAccessToken();
+    return {
+        'access-token': token || DHAN_ACCESS_TOKEN,
+        'client-id': DHAN_CLIENT_ID,
+        'Content-Type': 'application/json'
+    };
+}
+
+/**
+ * Synchronous headers (for backwards compatibility)
+ */
 function getHeaders(): Record<string, string> {
     return {
-        'access-token': DHAN_ACCESS_TOKEN,
+        'access-token': cachedToken || DHAN_ACCESS_TOKEN,
         'client-id': DHAN_CLIENT_ID,
         'Content-Type': 'application/json'
     };
@@ -424,39 +517,52 @@ export async function getBalance(): Promise<{ available: number; utilized: numbe
         return { available: 100000, utilized: 0 }; // Mock balance
     }
 
-    try {
-        const url = `${DHAN_BASE_URL}/v2/fundlimit`;
-        console.log('🔍 Fetching Dhan balance from:', url);
+    const fetchBalance = async (retryOnAuth = true): Promise<{ available: number; utilized: number; debug?: any } | null> => {
+        try {
+            const url = `${DHAN_BASE_URL}/v2/fundlimit`;
+            const headers = await getHeadersAsync();
 
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: getHeaders()
-        });
+            const response = await fetch(url, {
+                method: 'GET',
+                headers
+            });
 
-        const responseText = await response.text();
-        console.log('📨 Dhan fundlimit response status:', response.status);
-        console.log('� Dhan fundlimit response body:', responseText);
+            const responseText = await response.text();
+            console.log('📨 Dhan fundlimit response status:', response.status);
 
-        if (response.ok) {
-            try {
-                const data = JSON.parse(responseText);
-
-                // Dhan API returns availableBalance and utilizedAmount
-                return {
-                    available: data.availableBalance || data.sodLimit || 0,
-                    utilized: data.utilizedAmount || 0,
-                    debug: data
-                };
-            } catch (parseError) {
-                console.error('Dhan JSON parse error:', parseError);
+            // Handle 401 - try to refresh token
+            if (response.status === 401 && retryOnAuth) {
+                console.log('⚠️ Dhan token expired, attempting refresh...');
+                const refreshed = await refreshAccessToken();
+                if (refreshed) {
+                    return fetchBalance(false); // Retry once with new token
+                }
+                return null;
             }
-        }
 
-        return null;
-    } catch (error) {
-        console.error('Dhan getBalance error:', error);
-        return null;
-    }
+            if (response.ok) {
+                try {
+                    const data = JSON.parse(responseText);
+
+                    // Dhan API returns availableBalance and utilizedAmount
+                    return {
+                        available: data.availableBalance || data.sodLimit || 0,
+                        utilized: data.utilizedAmount || 0,
+                        debug: data
+                    };
+                } catch (parseError) {
+                    console.error('Dhan JSON parse error:', parseError);
+                }
+            }
+
+            return null;
+        } catch (error) {
+            console.error('Dhan getBalance error:', error);
+            return null;
+        }
+    };
+
+    return fetchBalance();
 }
 
 /**
