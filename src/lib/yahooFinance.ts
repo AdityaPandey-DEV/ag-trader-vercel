@@ -1,16 +1,12 @@
 /**
- * Yahoo Finance API Integration
- * Uses yahoo-finance2 or a direct fetch to Yahoo's public endpoints
- * for backup market data when Upstox/Dhan are unavailable.
+ * Yahoo Finance API Integration using yahoo-finance2 package
+ * Provides reliable market data when Upstox/Dhan are unavailable.
  */
 
-// Yahoo Finance API endpoint for quotes
-const YAHOO_API_BASE = 'https://query1.finance.yahoo.com/v7/finance/quote';
+import YahooFinance from 'yahoo-finance2';
 
-// Map NSE symbols to Yahoo Finance format (e.g., RELIANCE -> RELIANCE.NS)
-function toYahooSymbol(symbol: string): string {
-    return `${symbol}.NS`;
-}
+// Create the YahooFinance instance
+const yahooFinance = new YahooFinance();
 
 export interface YahooQuote {
     symbol: string;
@@ -24,48 +20,52 @@ export interface YahooQuote {
     volume: number;
 }
 
+// Map NSE symbols to Yahoo Finance format (e.g., RELIANCE -> RELIANCE.NS)
+function toYahooSymbol(symbol: string): string {
+    return `${symbol}.NS`;
+}
+
 /**
  * Fetch quotes from Yahoo Finance for a list of NSE symbols
  */
 export async function fetchYahooQuotes(symbols: string[]): Promise<Record<string, YahooQuote>> {
     if (symbols.length === 0) return {};
 
-    try {
-        const yahooSymbols = symbols.map(toYahooSymbol).join(',');
-        const url = `${YAHOO_API_BASE}?symbols=${yahooSymbols}`;
+    const result: Record<string, YahooQuote> = {};
 
-        const response = await fetch(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            },
-            signal: AbortSignal.timeout(5000) // 5 second timeout
+    try {
+        const yahooSymbols = symbols.map(toYahooSymbol);
+
+        // Use quoteSummary for each symbol (more reliable than batch quote)
+        const quotePromises = yahooSymbols.map(async (yahooSymbol) => {
+            try {
+                const quote: any = await yahooFinance.quote(yahooSymbol);
+                return quote;
+            } catch (e) {
+                console.error(`Yahoo Finance error for ${yahooSymbol}:`, e);
+                return null;
+            }
         });
 
-        if (!response.ok) {
-            console.error('Yahoo Finance API error:', response.statusText);
-            return {};
-        }
+        const quotes: any[] = await Promise.all(quotePromises);
 
-        const data = await response.json();
-        const result: Record<string, YahooQuote> = {};
+        for (const quote of quotes) {
+            if (!quote || !quote.symbol) continue;
 
-        if (data.quoteResponse?.result) {
-            for (const quote of data.quoteResponse.result) {
-                // Extract the original NSE symbol from Yahoo format
-                const nseSymbol = quote.symbol.replace('.NS', '');
+            // Extract the original NSE symbol from Yahoo format
+            const nseSymbol = quote.symbol.replace('.NS', '');
 
-                result[nseSymbol] = {
-                    symbol: nseSymbol,
-                    lastPrice: quote.regularMarketPrice || 0,
-                    open: quote.regularMarketOpen || 0,
-                    high: quote.regularMarketDayHigh || 0,
-                    low: quote.regularMarketDayLow || 0,
-                    close: quote.regularMarketPreviousClose || 0,
-                    change: quote.regularMarketChange || 0,
-                    changePercent: quote.regularMarketChangePercent || 0,
-                    volume: quote.regularMarketVolume || 0
-                };
-            }
+            result[nseSymbol] = {
+                symbol: nseSymbol,
+                lastPrice: quote.regularMarketPrice || 0,
+                open: quote.regularMarketOpen || 0,
+                high: quote.regularMarketDayHigh || 0,
+                low: quote.regularMarketDayLow || 0,
+                close: quote.regularMarketPreviousClose || 0,
+                change: quote.regularMarketChange || 0,
+                changePercent: quote.regularMarketChangePercent || 0,
+                volume: quote.regularMarketVolume || 0
+            };
         }
 
         return result;
