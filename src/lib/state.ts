@@ -35,6 +35,7 @@ export interface BrokerState {
     planned_trades: PlannedTrade[];
     equity_history: Array<{ time: string; equity: number }>;
     kill_switch: boolean;
+    logs: string[]; // Isolated logs
 }
 
 // 2. Global State (Shared across all brokers)
@@ -43,7 +44,7 @@ interface InternalState {
     regime: MarketRegime | string;
     tsd_count: number;
     watchlist: string[];
-    logs: string[];
+    // logs removed from global
     current_symbol: string;
     system_state: SystemState;
 
@@ -57,7 +58,7 @@ export interface TradingState extends BrokerState {
     regime: MarketRegime | string;
     tsd_count: number;
     watchlist: string[];
-    logs: string[];
+    // logs included via BrokerState extension
     current_symbol: string;
     system_state: SystemState;
     paper_mode: boolean; // Computed
@@ -75,7 +76,8 @@ const defaultBrokerState: BrokerState = {
     positions: [],
     planned_trades: [],
     equity_history: [],
-    kill_switch: false
+    kill_switch: false,
+    logs: ['[SYSTEM] Algo Trader Engine initialized.']
 };
 
 const initialState: InternalState = {
@@ -89,7 +91,7 @@ const initialState: InternalState = {
         'SBIN', 'LT', 'AXISBANK', 'BHARTIARTL', 'ITC',
         'GOLDBEES', 'SILVERBEES', 'NIFTYBEES', 'BANKBEES', 'LIQUIDBEES'
     ],
-    logs: ['[SYSTEM] Algo Trader Engine initialized.'],
+    // Global logs removed
     brokers: {
         PAPER: { ...defaultBrokerState, initial_capital: 100000, broker_balance: 100000, equity_history: [{ time: new Date().toLocaleTimeString(), equity: 100000 }] },
         DHAN: { ...defaultBrokerState },
@@ -109,7 +111,6 @@ export function getState(): TradingState {
         regime: state.regime,
         tsd_count: state.tsd_count,
         watchlist: state.watchlist,
-        logs: state.logs,
         current_symbol: state.current_symbol,
         system_state: state.system_state,
         paper_mode: state.broker_mode === 'PAPER',
@@ -120,7 +121,7 @@ export function getState(): TradingState {
 // Update Functions - Now target the ACTIVE broker
 export function updateState(partial: Partial<TradingState>) {
     // Separate global props from broker props
-    const globalKeys = ['broker_mode', 'regime', 'tsd_count', 'watchlist', 'logs', 'current_symbol', 'system_state'];
+    const globalKeys = ['broker_mode', 'regime', 'tsd_count', 'watchlist', 'current_symbol', 'system_state'];
     const activeBroker = state.brokers[state.broker_mode];
 
     Object.keys(partial).forEach(key => {
@@ -138,7 +139,8 @@ export function resetState() {
 
 export function addLog(message: string) {
     const timestamp = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-    state.logs = [`[${timestamp}] ${message}`, ...state.logs.slice(0, 49)];
+    const active = state.brokers[state.broker_mode];
+    active.logs = [`[${timestamp}] ${message}`, ...active.logs.slice(0, 49)];
 }
 
 export function updateEquity() {
@@ -215,4 +217,3 @@ export function getBrokerMode(): BrokerMode {
 export function getBrokerState(mode: BrokerMode): BrokerState {
     return state.brokers[mode];
 }
-

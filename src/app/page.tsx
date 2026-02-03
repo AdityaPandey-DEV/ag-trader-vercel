@@ -483,7 +483,11 @@ export default function Dashboard() {
                         <p className="symbol-status">Monitoring</p>
                       )}
                     </div>
-                    <span className="badge-engine">V3</span>
+                    {['GOLDBEES', 'SILVERBEES', 'NIFTYBEES', 'BANKBEES', 'LIQUIDBEES'].includes(symbol) ? (
+                      <span className="badge-engine" style={{ background: 'rgba(59, 130, 246, 0.1)', color: '#3b82f6', border: '1px solid rgba(59, 130, 246, 0.2)' }}>V2</span>
+                    ) : (
+                      <span className="badge-engine">V3</span>
+                    )}
                   </div>
                 );
               })}
