@@ -153,10 +153,22 @@ export async function handleUpstoxCallback(code: string): Promise<string> {
 }
 
 /**
- * Check if we have a valid Upstox session
+ * Check if we have a valid Upstox session (sync - checks memory/file only)
+ * For API routes, use isUpstoxAuthenticatedAsync instead
  */
 export function isUpstoxAuthenticated(): boolean {
     loadTokenFromFile(); // Try to load from file if not in memory
+    return accessToken !== null;
+}
+
+/**
+ * Check if we have a valid Upstox session (async - checks Redis too)
+ */
+export async function isUpstoxAuthenticatedAsync(): Promise<boolean> {
+    if (accessToken) return true;
+
+    // Try to load from Redis
+    await loadTokenAsync();
     return accessToken !== null;
 }
 

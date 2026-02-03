@@ -1,13 +1,13 @@
 
 import { NextResponse } from 'next/server';
 import { loadToken, hasToken } from '@/lib/redis';
-import { isUpstoxAuthenticated } from '@/lib/upstoxApi';
+import { isUpstoxAuthenticatedAsync } from '@/lib/upstoxApi';
 
 export async function GET() {
     try {
         const hasRedisToken = await hasToken();
         const redisToken = await loadToken();
-        const inMemoryAuth = isUpstoxAuthenticated();
+        const inMemoryAuth = await isUpstoxAuthenticatedAsync();
 
         // Check ALL possible Redis environment variables
         const redisEnvVars = {

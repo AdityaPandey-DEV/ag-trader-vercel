@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getState, updateState, updateEquity } from '@/lib/state';
 import { getMarketInfo } from '@/lib/marketHours';
 import { isDhanConfigured, getBalance } from '@/lib/dhanApi';
-import { fetchUpstoxFullQuotes, isUpstoxAuthenticated } from '@/lib/upstoxApi';
+import { fetchUpstoxFullQuotes, isUpstoxAuthenticatedAsync } from '@/lib/upstoxApi';
 import { initRiskEngine } from '@/lib/riskEngine';
 
 // Cache for balance to avoid too many API calls
@@ -89,7 +89,7 @@ export async function GET() {
         market_message: marketInfo.message,
         data_source: dataSource,
         dhan_configured: dhanConfigured,
-        has_upstox_token: isUpstoxAuthenticated(), // DEBUG: Check if token exists
+        has_upstox_token: await isUpstoxAuthenticatedAsync(), // DEBUG: Check if token exists
         quotes: quotes // Return the Upstox quotes
     });
 }
