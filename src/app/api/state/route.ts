@@ -1,80 +1,107 @@
 import { NextResponse } from 'next/server';
-import { getState, updateState, updateEquity } from '@/lib/state';
+import { getState, updateState, updateEquity, updateBrokerBalance } from '@/lib/state';
 import { getMarketInfo } from '@/lib/marketHours';
-import { isDhanConfigured, getBalance } from '@/lib/dhanApi';
-import { fetchUpstoxFullQuotes, isUpstoxAuthenticatedAsync } from '@/lib/upstoxApi';
+import { isDhanConfigured, getBalance as getDhanBalance } from '@/lib/dhanApi';
+import { fetchUpstoxFullQuotes, isUpstoxAuthenticatedAsync, getUpstoxBalance } from '@/lib/upstoxApi';
 import { initRiskEngine } from '@/lib/riskEngine';
 
 // Cache for balance to avoid too many API calls
-let cachedBalance = 0;
+let cachedDhanBalance = 0;
+let cachedUpstoxBalance = 0;
 let lastBalanceFetch = 0;
-const BALANCE_CACHE_MS = 60000; // 1 minute cache
+const BALANCE_CACHE_MS = 30000; // 30 seconds cache
 
 export async function GET() {
     const state = getState();
     const marketInfo = getMarketInfo();
     const dhanConfigured = isDhanConfigured();
-
-    // Determine data source indicator
-    // Priority: Upstox (data) > Dhan (execution) > Mock
-    let dataSource = 'MOCK';
     const hasUpstoxToken = await isUpstoxAuthenticatedAsync();
 
+    // Determine data source indicator
+    let dataSource = 'MOCK';
+
     if (hasUpstoxToken) {
-        // Upstox is connected for data (even if market closed)
-        dataSource = state.paper_mode ? 'UPSTOX_PAPER' : 'UPSTOX_LIVE';
+        dataSource = state.broker_mode === 'PAPER' ? 'UPSTOX_PAPER' : 'UPSTOX_LIVE';
     } else if (dhanConfigured) {
-        // Fallback to Dhan
-        dataSource = state.paper_mode ? 'PAPER' : 'DHAN_LIVE';
+        dataSource = state.broker_mode === 'PAPER' ? 'PAPER' : 'DHAN_LIVE';
     }
 
-    // Fetch real balance from Dhan in LIVE mode (even when market closed!)
+    // Fetch live broker balance based on broker_mode
+    let brokerBalance = state.broker_balance;
     let effectiveCapital = state.initial_capital;
+    const now = Date.now();
 
-    if (!state.paper_mode && dhanConfigured) {
-        const now = Date.now();
-        if (now - lastBalanceFetch > BALANCE_CACHE_MS || cachedBalance === 0) {
+    // Only fetch if cache expired
+    if (now - lastBalanceFetch > BALANCE_CACHE_MS) {
+        lastBalanceFetch = now;
+
+        // DHAN Balance
+        if (state.broker_mode === 'DHAN' && dhanConfigured) {
             try {
-                const balanceResult = await getBalance();
+                const balanceResult = await getDhanBalance();
                 const realBalance = balanceResult?.available ?? null;
 
-                // FIXED: Allow 0 balance (for empty accounts)
                 if (realBalance !== null && realBalance >= 0) {
-                    cachedBalance = realBalance;
-                    lastBalanceFetch = now;
-                    // Update state and sync Risk Engine
-                    updateState({ initial_capital: realBalance });
-                    initRiskEngine(realBalance);
+                    cachedDhanBalance = realBalance;
+                    brokerBalance = realBalance;
                     effectiveCapital = realBalance;
+                    updateBrokerBalance(realBalance);
+                    initRiskEngine(realBalance);
+                    console.log(`💰 Dhan Balance: ₹${realBalance.toLocaleString()}`);
                 }
             } catch (e) {
-                console.error('Balance fetch error:', e);
-                // Use cached balance if fetch fails (only if we have a valid cache)
-                if (cachedBalance >= 0 && lastBalanceFetch > 0) {
-                    effectiveCapital = cachedBalance;
+                console.error('Dhan balance fetch error:', e);
+                if (cachedDhanBalance > 0) {
+                    brokerBalance = cachedDhanBalance;
+                    effectiveCapital = cachedDhanBalance;
                 }
             }
-        } else {
-            effectiveCapital = cachedBalance;
+        }
+
+        // UPSTOX Balance
+        if (state.broker_mode === 'UPSTOX' && hasUpstoxToken) {
+            try {
+                const realBalance = await getUpstoxBalance();
+
+                if (realBalance !== null && realBalance >= 0) {
+                    cachedUpstoxBalance = realBalance;
+                    brokerBalance = realBalance;
+                    effectiveCapital = realBalance;
+                    updateBrokerBalance(realBalance);
+                    initRiskEngine(realBalance);
+                    console.log(`💰 Upstox Balance: ₹${realBalance.toLocaleString()}`);
+                }
+            } catch (e) {
+                console.error('Upstox balance fetch error:', e);
+                if (cachedUpstoxBalance > 0) {
+                    brokerBalance = cachedUpstoxBalance;
+                    effectiveCapital = cachedUpstoxBalance;
+                }
+            }
+        }
+    } else {
+        // Use cached balance
+        if (state.broker_mode === 'DHAN' && cachedDhanBalance > 0) {
+            brokerBalance = cachedDhanBalance;
+            effectiveCapital = cachedDhanBalance;
+        } else if (state.broker_mode === 'UPSTOX' && cachedUpstoxBalance > 0) {
+            brokerBalance = cachedUpstoxBalance;
+            effectiveCapital = cachedUpstoxBalance;
         }
     }
 
     // NEW: Fetch live quotes using UPSTOX (User's preferred data source)
     let quotes: Record<string, any> = {};
 
-    // Always attempt Upstox fetch if we have a watchlist, regardless of Dhan status
     if (state.watchlist.length > 0) {
         try {
-            // Assume User has Upstox configured if they are asking for it
             const upstoxQuotes = await fetchUpstoxFullQuotes(state.watchlist);
 
-            // Transform Upstox format to match UI expected format
             Object.keys(upstoxQuotes).forEach(sym => {
                 const q = upstoxQuotes[sym];
                 if (q) {
                     quotes[sym] = {
                         close: q.lastPrice,
-                        // Use net_change from Upstox, or calculate if missing
                         change: q.change,
                         changePercent: (q.change / (q.lastPrice - q.change)) * 100
                     };
@@ -95,9 +122,9 @@ export async function GET() {
         market_message: marketInfo.message,
         data_source: dataSource,
         broker_mode: state.broker_mode,
-        broker_balance: state.broker_balance,
+        broker_balance: brokerBalance,
         dhan_configured: dhanConfigured,
-        has_upstox_token: await isUpstoxAuthenticatedAsync(),
+        has_upstox_token: hasUpstoxToken,
         quotes: quotes
     });
 }

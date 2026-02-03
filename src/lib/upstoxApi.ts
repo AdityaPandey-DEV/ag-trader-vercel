@@ -197,12 +197,12 @@ const ISIN_MAP: Record<string, string> = {
     'HCLTECH': 'INE860A01027',
     'ULTRACEMCO': 'INE481G01011',
     'SUNPHARMA': 'INE044A01036',
-    // ETFs
+    // ETFs - Correct ISINs
     'GOLDBEES': 'INF204KB17I5',
-    'SILVERBEES': 'INF204KB14I2',
-    'NIFTYBEES': 'INF204KB14I1',
+    'SILVERBEES': 'INF204KC1402',
+    'NIFTYBEES': 'INF204KB14I2',
     'BANKBEES': 'INF204KB15I9',
-    'LIQUIDBEES': 'INF204KB19I1'
+    'LIQUIDBEES': 'INF732E01037'
 };
 
 export async function fetchUpstoxQuotes(symbols: string[]) {
