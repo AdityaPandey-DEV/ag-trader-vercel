@@ -419,28 +419,37 @@ export function getOpenOrders(): TrackedOrder[] {
 /**
  * Get account balance
  */
-export async function getBalance(): Promise<{ available: number; utilized: number } | null> {
+export async function getBalance(): Promise<{ available: number; utilized: number; debug?: any } | null> {
     if (!isDhanConfigured()) {
         return { available: 100000, utilized: 0 }; // Mock balance
     }
 
     try {
-        const response = await fetch(`${DHAN_BASE_URL}/v2/fundlimit`, {
+        const url = `${DHAN_BASE_URL}/v2/fundlimit`;
+        console.log('🔍 Fetching Dhan balance from:', url);
+
+        const response = await fetch(url, {
             method: 'GET',
             headers: getHeaders()
         });
 
-        if (response.ok) {
-            const data = await response.json();
-            console.log('📊 Dhan fundlimit response:', JSON.stringify(data));
+        const responseText = await response.text();
+        console.log('📨 Dhan fundlimit response status:', response.status);
+        console.log('� Dhan fundlimit response body:', responseText);
 
-            // Dhan API returns availableBalance and utilizedAmount
-            return {
-                available: data.availableBalance || data.availableFund || data.sodLimit || 0,
-                utilized: data.utilizedAmount || data.utilizedFund || 0
-            };
-        } else {
-            console.error('Dhan fundlimit error:', response.status, await response.text());
+        if (response.ok) {
+            try {
+                const data = JSON.parse(responseText);
+
+                // Dhan API returns availableBalance and utilizedAmount
+                return {
+                    available: data.availableBalance || data.sodLimit || 0,
+                    utilized: data.utilizedAmount || 0,
+                    debug: data
+                };
+            } catch (parseError) {
+                console.error('Dhan JSON parse error:', parseError);
+            }
         }
 
         return null;
