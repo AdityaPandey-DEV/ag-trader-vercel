@@ -172,7 +172,7 @@ export default function Dashboard() {
               </div>
             ) : (
               <>
-                <span className="balance-amount">₹{(data.broker_balance || data.initial_capital).toLocaleString('en-IN')}</span>
+                <span className="balance-amount">₹{(data.broker_balance ?? data.initial_capital).toLocaleString('en-IN')}</span>
                 {data.broker_mode === 'PAPER' && (
                   <button onClick={() => setEditingBalance(true)} className="balance-edit-btn" title="Edit Balance">✏️</button>
                 )}
