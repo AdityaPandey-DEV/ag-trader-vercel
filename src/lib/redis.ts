@@ -1,8 +1,8 @@
 /**
  * Upstash Redis Client for token persistence
- * Environment variables (Vercel automatically sets these when you add Upstash integration):
- * - UPSTASH_REDIS_REST_URL or KV_REST_API_URL
- * - UPSTASH_REDIS_REST_TOKEN or KV_REST_API_TOKEN
+ * Vercel's Upstash integration sets these env vars automatically:
+ * - KV_URL, KV_REST_API_URL, KV_REST_API_TOKEN, KV_REST_API_READ_ONLY_TOKEN
+ * - Or: UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
  */
 
 import { Redis } from '@upstash/redis';
@@ -13,21 +13,33 @@ let redisInitAttempted = false;
 
 function getRedis(): Redis | null {
     if (redis) return redis;
-    if (redisInitAttempted) return null; // Don't retry if already failed
+    if (redisInitAttempted) return null;
 
     redisInitAttempted = true;
 
-    // Check for multiple possible env var names (Vercel uses different names)
-    const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
-    const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+    // Check for all possible Vercel/Upstash env var names
+    const url = process.env.KV_REST_API_URL
+        || process.env.UPSTASH_REDIS_REST_URL
+        || process.env.REDIS_REST_URL;
+
+    const token = process.env.KV_REST_API_TOKEN
+        || process.env.UPSTASH_REDIS_REST_TOKEN
+        || process.env.REDIS_REST_TOKEN;
+
+    console.log('🔍 Redis config check:', {
+        KV_REST_API_URL: process.env.KV_REST_API_URL ? '✅' : '❌',
+        UPSTASH_REDIS_REST_URL: process.env.UPSTASH_REDIS_REST_URL ? '✅' : '❌',
+        KV_REST_API_TOKEN: process.env.KV_REST_API_TOKEN ? '✅' : '❌',
+        UPSTASH_REDIS_REST_TOKEN: process.env.UPSTASH_REDIS_REST_TOKEN ? '✅' : '❌'
+    });
 
     if (!url || !token) {
-        console.warn('⚠️ Redis not configured. Available env vars:',
-            Object.keys(process.env).filter(k => k.includes('REDIS') || k.includes('KV') || k.includes('UPSTASH')).join(', ') || 'NONE');
+        console.warn('⚠️ Redis REST API not configured. Token will not persist.');
+        console.warn('💡 Go to Vercel Dashboard → Storage → Click on your Redis → Settings → Copy REST API credentials');
         return null;
     }
 
-    console.log('🔗 Initializing Redis connection...');
+    console.log('🔗 Connecting to Redis:', url.substring(0, 30) + '...');
     redis = new Redis({ url, token });
     return redis;
 }
