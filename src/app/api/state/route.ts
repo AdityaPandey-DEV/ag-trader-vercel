@@ -41,7 +41,7 @@ export async function GET() {
                 const balanceResult = await getDhanBalance();
                 const realBalance = balanceResult?.available ?? null;
 
-                if (realBalance !== null && realBalance >= 0) {
+                if (realBalance !== null) {
                     cachedDhanBalance = realBalance;
                     brokerBalance = realBalance;
                     effectiveCapital = realBalance;
@@ -63,7 +63,7 @@ export async function GET() {
             try {
                 const realBalance = await getUpstoxBalance();
 
-                if (realBalance !== null && realBalance >= 0) {
+                if (realBalance !== null) {
                     cachedUpstoxBalance = realBalance;
                     brokerBalance = realBalance;
                     effectiveCapital = realBalance;
