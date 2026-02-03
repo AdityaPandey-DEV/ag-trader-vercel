@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getState, updateState, addLog, updateEquity } from '@/lib/state';
+import { loadTradingState } from '@/lib/storage';
 import { fetchUpstoxQuotes, getUpstoxLoginUrl } from '@/lib/upstoxApi';
 import { generateMockData, getPriorData, updatePriorData, calculateLevels } from '@/lib/mockData';
 import { fetchYahooQuotes, transformYahooToOHLCV } from '@/lib/yahooFinance';
@@ -56,6 +57,12 @@ const historicalData: Record<string, OHLCV[]> = {};
 const MAX_HISTORY = 250; // Keep 250 candles for EMA(200)
 
 export async function POST() {
+    // 0. Load persisted state first (CRITICAL for Vercel/Serverless)
+    const persistedState = await loadTradingState();
+    if (persistedState) {
+        updateState(persistedState);
+    }
+
     const state = getState();
     const stateMachine = getStateMachine();
 
@@ -73,14 +80,14 @@ export async function POST() {
 
     try {
         // Daily reset check
-        if (checkDailyReset()) {
-            performDailyReset();
+        if (await checkDailyReset()) {
+            await performDailyReset();
             addLog('📅 New trading day - state reset');
         }
 
         // Load persisted historical data if cache is empty
         if (Object.keys(historicalData).length === 0) {
-            const savedHistory = loadHistoricalData();
+            const savedHistory = await loadHistoricalData();
             if (savedHistory) {
                 Object.assign(historicalData, savedHistory);
                 addLog('📂 Loaded historical data from storage');
@@ -88,13 +95,13 @@ export async function POST() {
         }
 
         // Load persisted regime state
-        const savedRegime = loadRegimeState();
+        const savedRegime = await loadRegimeState();
         if (savedRegime) {
             importRegimeState(savedRegime);
         }
 
         // Increment tick count
-        incrementTickCount();
+        await incrementTickCount();
 
         const marketInfo = getMarketInfo();
         const marketOpen = isMarketOpen();
@@ -471,9 +478,11 @@ export async function POST() {
         // 13. Persist data periodically (every 10 ticks)
         const now = Date.now();
         if (now % 10 === 0) {
-            saveTradingState(getState());
-            saveRegimeState(exportRegimeState());
-            saveHistoricalData(historicalData);
+            // Note: fire and forget to avoid blocking response? 
+            // Better to await to ensure consistency on serverless
+            await saveTradingState(getState());
+            await saveRegimeState(exportRegimeState());
+            await saveHistoricalData(historicalData);
         }
 
         // 14. Log activity (less frequently to avoid spam)

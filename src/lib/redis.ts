@@ -121,3 +121,68 @@ export async function clearToken(): Promise<void> {
         console.error('Redis clear error:', e);
     }
 }
+
+/**
+ * Generic Save to Redis
+ */
+export async function setValue(key: string, value: any, ttlSeconds: number = 86400): Promise<boolean> {
+    const client = getRedis();
+    if (!client) return false;
+
+    try {
+        const stringVal = JSON.stringify(value);
+        if (ttlSeconds > 0) {
+            await client.set(key, stringVal, { ex: ttlSeconds });
+        } else {
+            await client.set(key, stringVal);
+        }
+        return true;
+    } catch (e) {
+        console.error(`Redis save error (${key}):`, e);
+        return false;
+    }
+}
+
+/**
+ * Generic Load from Redis
+ */
+export async function getValue<T>(key: string): Promise<T | null> {
+    const client = getRedis();
+    if (!client) return null;
+
+    try {
+        const data = await client.get<string>(key);
+        if (data) {
+            // Upstash redis client might return object if it auto-parses? 
+            // Usually returns string or object depending on config. 
+            // Safest to handle both or assume standard behavior.
+            // The @upstash/redis client typically returns the value as is if it's JSON?
+            // Let's assume it handles JSON if stored as JSON/string because we control input.
+            // Actually, if we stringify above, we might get object back if client auto-parses, or string.
+            // Let's rely on type assertion or parsing if string.
+            if (typeof data === 'string') {
+                return JSON.parse(data);
+            }
+            return data as T;
+        }
+        return null;
+    } catch (e) {
+        console.error(`Redis load error (${key}):`, e);
+        return null;
+    }
+}
+
+/**
+ * Generic Delete from Redis
+ */
+export async function deleteKey(key: string): Promise<boolean> {
+    const client = getRedis();
+    if (!client) return false;
+    try {
+        await client.del(key);
+        return true;
+    } catch (e) {
+        console.error(`Redis delete error (${key}):`, e);
+        return false;
+    }
+}
