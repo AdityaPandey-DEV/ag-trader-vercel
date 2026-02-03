@@ -30,7 +30,8 @@ export async function GET() {
     // Step 2: Test Upstox API with the token
     if (redisToken) {
         try {
-            const testSymbol = 'NSE_EQ|RELIANCE';
+            // RELIANCE ISIN = INE002A01018
+            const testSymbol = encodeURIComponent('NSE_EQ|INE002A01018');
             const url = `https://api.upstox.com/v2/market-quote/ltp?instrument_key=${testSymbol}`;
 
             const response = await fetch(url, {

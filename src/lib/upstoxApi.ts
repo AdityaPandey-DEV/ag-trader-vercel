@@ -175,6 +175,30 @@ export async function isUpstoxAuthenticatedAsync(): Promise<boolean> {
 /**
  * Fetch LTP for a list of symbols
  */
+// ISIN mapping for NSE stocks (Upstox requires ISIN, not trading symbol)
+const ISIN_MAP: Record<string, string> = {
+    'RELIANCE': 'INE002A01018',
+    'TCS': 'INE467B01029',
+    'INFY': 'INE009A01021',
+    'HDFCBANK': 'INE040A01034',
+    'ICICIBANK': 'INE090A01021',
+    'HINDUNILVR': 'INE030A01027',
+    'ITC': 'INE154A01025',
+    'SBIN': 'INE062A01020',
+    'BHARTIARTL': 'INE397D01024',
+    'KOTAKBANK': 'INE237A01028',
+    'LT': 'INE018A01030',
+    'AXISBANK': 'INE238A01034',
+    'ASIANPAINT': 'INE021A01026',
+    'MARUTI': 'INE585B01010',
+    'TITAN': 'INE280A01028',
+    'BAJFINANCE': 'INE296A01024',
+    'WIPRO': 'INE075A01022',
+    'HCLTECH': 'INE860A01027',
+    'ULTRACEMCO': 'INE481G01011',
+    'SUNPHARMA': 'INE044A01036'
+};
+
 export async function fetchUpstoxQuotes(symbols: string[]) {
     // Try to load token from Redis/file if not in memory (cold start recovery)
     await loadTokenAsync();
@@ -185,9 +209,17 @@ export async function fetchUpstoxQuotes(symbols: string[]) {
     }
 
     try {
-        // Map common symbols to Upstox Instrument Keys
-        // Example: RELIANCE -> NSE_EQ|RELIANCE
-        const instrumentKeys = symbols.map(s => `NSE_EQ|${s}`).join(',');
+        // Map symbols to Upstox Instrument Keys using ISIN
+        // Format: NSE_EQ|ISIN (URL encoded)
+        const instrumentKeys = symbols
+            .filter(s => ISIN_MAP[s]) // Only include symbols we have ISINs for
+            .map(s => encodeURIComponent(`NSE_EQ|${ISIN_MAP[s]}`))
+            .join(',');
+
+        if (!instrumentKeys) {
+            console.warn('No valid ISINs found for symbols:', symbols);
+            return {};
+        }
 
         const url = `https://api.upstox.com/v2/market-quote/ltp?instrument_key=${instrumentKeys}`;
 
@@ -211,10 +243,17 @@ export async function fetchUpstoxQuotes(symbols: string[]) {
 
         const result: Record<string, any> = {};
 
+        // Create reverse ISIN map for lookup
+        const ISIN_TO_SYMBOL: Record<string, string> = {};
+        for (const [symbol, isin] of Object.entries(ISIN_MAP)) {
+            ISIN_TO_SYMBOL[isin] = symbol;
+        }
+
         if (json.data) {
             for (const key of Object.keys(json.data)) {
-                // Key is "NSE_EQ|RELIANCE", extract "RELIANCE"
-                const symbol = key.split('|')[1];
+                // Key is "NSE_EQ|ISIN", extract the ISIN and map back to symbol
+                const isin = key.split('|')[1];
+                const symbol = ISIN_TO_SYMBOL[isin] || isin;
                 const data = json.data[key];
 
                 result[symbol] = {
@@ -224,6 +263,7 @@ export async function fetchUpstoxQuotes(symbols: string[]) {
             }
         }
 
+        console.log(`✅ Upstox: Fetched ${Object.keys(result).length} quotes`);
         return result;
 
     } catch (error) {
