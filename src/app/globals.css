@@ -1040,3 +1040,93 @@ button.danger {
     grid-template-columns: 1fr;
   }
 }
+/* --- MOBILE OPTIMIZATIONS --- */
+@media (max-width: 768px) {
+  .dashboard-container {
+    padding: 0.75rem;
+  }
+
+  header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 1rem;
+  }
+
+  .header-right {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .balance-display {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .broker-selector, .broker-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .engine-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .card-metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* Make tables scrollable */
+  .position-table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .position-table th, 
+  .position-table td {
+    padding: 0.5rem;
+    font-size: 0.75rem;
+  }
+
+  /* V4 Panel Grid Mobile Override */
+  .v4-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Further Mobile Polish */
+@media (max-width: 768px) {
+  /* Hide Engine column in tables if it exists (usually 1st col in Portfolio table) */
+  .position-table th:first-child,
+  .position-table td:first-child {
+     /* Only if it is the "Engine" column. 
+        Note: logic relies on column order. 
+        In "Active Portfolio Positions", 1st is Engine. 
+        In others, it might be Symbol. We must be careful!
+     */
+     /* Let's just reduce padding instead of hiding indiscriminately */
+     padding: 0.5rem 0.25rem;
+  }
+  
+  .position-table {
+     font-size: 0.7rem;
+  }
+
+  /* Make badges smaller */
+  .badge, .badge-status {
+    font-size: 0.6rem;
+    padding: 2px 4px;
+  }
+
+  /* Adjust allocation bar text */
+  .allocation-bar .segment {
+      font-size: 0.6rem;
+  }
+  
+  /* Compact Header Title */
+  .header-left h1 {
+      font-size: 1.25rem;
+  }
+}
