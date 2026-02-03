@@ -262,7 +262,7 @@ export default function Dashboard() {
           <div className="card-metrics">
             <div className="metric">
               <span className="label">Allocation</span>
-              <span className="value">₹{(data.initial_capital * 0.7).toLocaleString()}</span>
+              <span className="value">₹{(Math.max(0, data.broker_balance ?? data.initial_capital) * 0.7).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
             </div>
             <div className="metric">
               <span className="label">Status</span>
@@ -284,7 +284,7 @@ export default function Dashboard() {
           <div className="card-metrics">
             <div className="metric">
               <span className="label">Allocation</span>
-              <span className="value">₹{(data.initial_capital * 0.3).toLocaleString()}</span>
+              <span className="value">₹{(Math.max(0, data.broker_balance ?? data.initial_capital) * 0.3).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
             </div>
             <div className="metric">
               <span className="label">Risk Consumed</span>
