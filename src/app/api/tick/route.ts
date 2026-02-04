@@ -143,7 +143,37 @@ export async function POST() {
         let marketData: Record<string, any>;
         let dataSource: string;
 
-        if (marketOpen && dhanConfigured && !state.paper_mode) {
+        // PRIORITY 1: If broker mode is UPSTOX, use Upstox API first
+        if (state.broker_mode === 'UPSTOX' && process.env.UPSTOX_API_KEY) {
+            try {
+                const upstoxData = await fetchUpstoxQuotes(CONFIG.WATCHLIST);
+                if (Object.keys(upstoxData).length > 0) {
+                    marketData = upstoxData;
+                    dataSource = marketOpen ? 'UPSTOX_LIVE' : 'UPSTOX_LTP (MARKET CLOSED)';
+                } else {
+                    // Upstox returned empty - fallback to Yahoo
+                    const yahooData = await fetchYahooQuotes(CONFIG.WATCHLIST);
+                    if (Object.keys(yahooData).length > 0) {
+                        marketData = transformYahooToOHLCV(yahooData);
+                        dataSource = 'YAHOO_FINANCE';
+                        addLog('⚠️ Upstox returned empty, using Yahoo Finance');
+                    } else {
+                        marketData = {};
+                        dataSource = 'NO_DATA';
+                    }
+                }
+            } catch (e) {
+                console.error("Upstox fetch error", e);
+                const yahooData = await fetchYahooQuotes(CONFIG.WATCHLIST);
+                if (Object.keys(yahooData).length > 0) {
+                    marketData = transformYahooToOHLCV(yahooData);
+                    dataSource = 'YAHOO_FINANCE';
+                } else {
+                    marketData = {};
+                    dataSource = 'NO_DATA';
+                }
+            }
+        } else if (marketOpen && dhanConfigured && !state.paper_mode) {
             // LIVE MODE: Real data from Dhan
             marketData = await fetchQuotes(CONFIG.WATCHLIST);
             dataSource = 'DHAN_LIVE';
