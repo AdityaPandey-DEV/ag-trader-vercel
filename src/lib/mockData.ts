@@ -59,10 +59,22 @@ export function updatePriorData(data: Record<string, OHLCV>) {
 }
 
 // Calculate Support/Resistance levels
-export function calculateLevels(data: OHLCV): { support: number; resistance: number } {
+// Uses historical data for proper swing levels when available
+export function calculateLevels(data: OHLCV, historicalData?: OHLCV[]): { support: number; resistance: number } {
+    // If we have historical data, use proper swing levels (20-candle lookback)
+    if (historicalData && historicalData.length >= 20) {
+        const last20 = historicalData.slice(-20);
+        const swingHigh = Math.max(...last20.map(c => c.high));
+        const swingLow = Math.min(...last20.map(c => c.low));
+        return {
+            support: swingLow,
+            resistance: swingHigh
+        };
+    }
+    // Fallback: widen the range significantly (0.5x instead of 0.1x)
     const range = data.high - data.low;
     return {
-        support: data.low - range * 0.1,
-        resistance: data.high + range * 0.1
+        support: data.low - range * 0.5,
+        resistance: data.high + range * 0.5
     };
 }

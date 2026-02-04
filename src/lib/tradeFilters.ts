@@ -226,10 +226,11 @@ export function runPreTradeChecks(
     }
 
     return {
-        canTrade: !volatility.skip && trend.strong && passed,
+        // Mean reversion works best WITHOUT strong trends, so we don't require trend.strong
+        canTrade: !volatility.skip && passed,
         reasons,
         volatilityOK: !volatility.skip,
-        trendOK: trend.strong,
+        trendOK: true,  // Not required for mean reversion strategy
         qualityScore: score
     };
 }

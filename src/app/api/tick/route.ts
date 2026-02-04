@@ -321,7 +321,7 @@ export async function POST() {
             if (!data) continue;
 
             const priorData = getPriorData(symbol);
-            const levels = calculateLevels(data);
+            const levels = calculateLevels(data, historicalData[symbol]);
 
             // Get potential entry levels for display
             const trades = calculatePlannedTrade(data, levels.support, levels.resistance);

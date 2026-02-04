@@ -65,7 +65,7 @@ export function generateSignal(
                 side: 'SHORT',
                 entry: data.close,
                 target: Number((resistance - baseRange * 1.5).toFixed(2)),
-                stop: Number((data.high * 1.002).toFixed(2)),
+                stop: Number((data.high * 1.005).toFixed(2)),  // 0.5% stop (was 0.2%)
                 current: data.close,
                 reason: 'Resistance Rejection'
             };
@@ -83,7 +83,7 @@ export function generateSignal(
                 side: 'LONG',
                 entry: data.close,
                 target: Number((support + baseRange * 1.5).toFixed(2)),
-                stop: Number((data.low * 0.998).toFixed(2)),
+                stop: Number((data.low * 0.995).toFixed(2)),  // 0.5% stop (was 0.2%)
                 current: data.close,
                 reason: 'Support Rejection'
             };
