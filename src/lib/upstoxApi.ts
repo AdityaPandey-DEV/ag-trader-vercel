@@ -262,15 +262,27 @@ export async function fetchUpstoxQuotes(symbols: string[]) {
 
         if (json.data) {
             for (const key of Object.keys(json.data)) {
-                // Key is "NSE_EQ|ISIN", extract the ISIN and map back to symbol
-                const isin = key.split('|')[1];
-                const symbol = ISIN_TO_SYMBOL[isin] || isin;
                 const data = json.data[key];
 
-                result[symbol] = {
-                    lastPrice: data.last_price,
-                    symbol: symbol
-                };
+                // Extract ISIN from instrument_token field (format: NSE_EQ|ISIN)
+                // Key format is NSE_EQ:SYMBOL but instrument_token has the ISIN
+                let symbol = '';
+                if (data.instrument_token) {
+                    const isin = data.instrument_token.split('|')[1];
+                    symbol = ISIN_TO_SYMBOL[isin] || '';
+                }
+
+                // Fallback: try to extract from key (format: NSE_EQ:SYMBOL)
+                if (!symbol && key.includes(':')) {
+                    symbol = key.split(':')[1];
+                }
+
+                if (symbol && data.last_price) {
+                    result[symbol] = {
+                        lastPrice: data.last_price,
+                        symbol: symbol
+                    };
+                }
             }
         }
 
