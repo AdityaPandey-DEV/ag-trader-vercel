@@ -299,12 +299,25 @@ export async function fetchUpstoxQuotes(symbols: string[]) {
  * Fetch Full OHLC Quotes
  */
 export async function fetchUpstoxFullQuotes(symbols: string[]) {
+    // Load token if not in memory (cold start recovery)
+    await loadTokenAsync();
+
     if (!accessToken) {
         return {};
     }
 
     try {
-        const instrumentKeys = symbols.map(s => `NSE_EQ|${s}`).join(',');
+        // Use ISIN_MAP for proper instrument keys
+        const instrumentKeys = symbols
+            .filter(s => ISIN_MAP[s])
+            .map(s => encodeURIComponent(`NSE_EQ|${ISIN_MAP[s]}`))
+            .join(',');
+
+        if (!instrumentKeys) {
+            console.warn('No valid ISINs found for symbols:', symbols);
+            return {};
+        }
+
         const url = `https://api.upstox.com/v2/market-quote/quotes?instrument_key=${instrumentKeys}`;
 
         const response = await fetch(url, {
@@ -312,28 +325,56 @@ export async function fetchUpstoxFullQuotes(symbols: string[]) {
                 'Authorization': `Bearer ${accessToken}`,
                 'Accept': 'application/json'
             },
-            signal: AbortSignal.timeout(5000) // 5 second timeout to prevent hanging the server
+            signal: AbortSignal.timeout(5000)
         });
+
+        if (!response.ok) {
+            if (response.status === 401) {
+                accessToken = null;
+            }
+            throw new Error(`Upstox API Error: ${response.statusText}`);
+        }
 
         const json = await response.json();
         const result: Record<string, any> = {};
 
+        // Create reverse ISIN map for lookup
+        const ISIN_TO_SYMBOL: Record<string, string> = {};
+        for (const [symbol, isin] of Object.entries(ISIN_MAP)) {
+            ISIN_TO_SYMBOL[isin] = symbol;
+        }
+
         if (json.data) {
             for (const key of Object.keys(json.data)) {
-                const symbol = key.split('|')[1];
                 const d = json.data[key];
 
-                result[symbol] = {
-                    lastPrice: d.last_price,
-                    open: d.ohlc.open,
-                    high: d.ohlc.high,
-                    low: d.ohlc.low,
-                    close: d.ohlc.close,
-                    volume: d.volume,
-                    change: d.net_change
-                };
+                // Extract ISIN from instrument_token field
+                let symbol = '';
+                if (d.instrument_token) {
+                    const isin = d.instrument_token.split('|')[1];
+                    symbol = ISIN_TO_SYMBOL[isin] || '';
+                }
+
+                // Fallback: extract from key (format: NSE_EQ:SYMBOL)
+                if (!symbol && key.includes(':')) {
+                    symbol = key.split(':')[1];
+                }
+
+                if (symbol && d.last_price) {
+                    result[symbol] = {
+                        lastPrice: d.last_price,
+                        open: d.ohlc?.open || d.last_price,
+                        high: d.ohlc?.high || d.last_price,
+                        low: d.ohlc?.low || d.last_price,
+                        close: d.ohlc?.close || d.last_price,
+                        volume: d.volume || 0,
+                        change: d.net_change || 0
+                    };
+                }
             }
         }
+
+        console.log(`✅ Upstox Full: Fetched ${Object.keys(result).length} quotes`);
         return result;
     } catch (error) {
         console.error('Error fetching Upstox full quotes:', error);
