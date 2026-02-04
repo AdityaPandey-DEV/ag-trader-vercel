@@ -143,8 +143,8 @@ export async function POST() {
         let marketData: Record<string, any>;
         let dataSource: string;
 
-        // PRIORITY 1: If broker mode is UPSTOX, use Upstox API first
-        if (state.broker_mode === 'UPSTOX' && process.env.UPSTOX_API_KEY) {
+        // PRIORITY 1: Always use Upstox for market data when configured (any broker mode)
+        if (process.env.UPSTOX_API_KEY) {
             try {
                 const upstoxData = await fetchUpstoxQuotes(CONFIG.WATCHLIST);
                 if (Object.keys(upstoxData).length > 0) {
