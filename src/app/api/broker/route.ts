@@ -1,13 +1,20 @@
 import { NextResponse } from 'next/server';
-import { getState, setBrokerMode, updateBrokerBalance, BrokerMode } from '@/lib/state';
+import { getState, setBrokerMode, updateBrokerBalance, updateState, BrokerMode } from '@/lib/state';
 import { isDhanConfigured, getBalance as getDhanBalance } from '@/lib/dhanApi';
 import { isUpstoxAuthenticatedAsync, getUpstoxBalance } from '@/lib/upstoxApi';
+import { loadTradingState } from '@/lib/storage';
 
 /**
  * GET /api/broker
  * Returns available brokers and their connection status
  */
 export async function GET() {
+    // Hydrate
+    const persistedState = await loadTradingState();
+    if (persistedState) {
+        updateState(persistedState);
+    }
+
     const state = getState();
     const dhanConfigured = isDhanConfigured();
     const upstoxConnected = await isUpstoxAuthenticatedAsync();

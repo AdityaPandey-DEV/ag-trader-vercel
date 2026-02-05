@@ -1,18 +1,29 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getState, updateState, addLog, resetState } from '@/lib/state';
+import { NextResponse } from 'next/server';
+import { getState, updateState, updateBrokerBalance } from '@/lib/state';
+import { loadTradingState, saveTradingState } from '@/lib/storage';
 
-export async function POST(request: NextRequest) {
-    const body = await request.json();
-    const amount = body.amount ?? 100000;
+export async function POST(req: Request) {
+    // Hydrate
+    const persistedState = await loadTradingState();
+    if (persistedState) {
+        updateState(persistedState);
+    }
 
-    // Reset state and set new capital
-    updateState({
-        initial_capital: amount,
-        pnl: 0,
-        risk_consumed: 0,
-        equity_history: [{ time: new Date().toLocaleTimeString(), equity: amount }]
-    });
-    addLog(`Capital reset to ₹${amount.toLocaleString()}`);
+    try {
+        const { amount } = await req.json();
+        const state = getState();
 
-    return NextResponse.json({ status: "success", capital: amount });
+        // Update both initial capital and current balance for the active broker
+        const activeBroker = state.all_brokers?.[state.broker_mode] || (state as any); // fallback
+
+        // We update via updateState API or specific helpers
+        // For capital setting, we usually mean to reset or top-up
+        updateState({ initial_capital: amount, broker_balance: amount });
+
+        await saveTradingState(getState());
+
+        return NextResponse.json({ success: true, capital: amount });
+    } catch (e) {
+        return NextResponse.json({ success: false, error: String(e) }, { status: 500 });
+    }
 }

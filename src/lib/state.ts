@@ -136,15 +136,24 @@ export function getState(): TradingState {
 }
 
 // Update Functions - Now target the ACTIVE broker
+// Update Functions - Now target the ACTIVE broker
 export function updateState(partial: Partial<TradingState>) {
     // Separate global props from broker props
     const globalKeys = ['broker_mode', 'regime', 'tsd_count', 'watchlist', 'current_symbol', 'system_state', 'quotes'];
-    const activeBroker = state.brokers[state.broker_mode];
 
+    // 1. Update Global Keys First (including broker_mode)
     Object.keys(partial).forEach(key => {
         if (globalKeys.includes(key)) {
             (state as any)[key] = (partial as any)[key];
-        } else if (key in activeBroker) {
+        }
+    });
+
+    // 2. Resolve Active Broker (AFTER potential mode switch)
+    const activeBroker = state.brokers[state.broker_mode];
+
+    // 3. Update Broker Keys
+    Object.keys(partial).forEach(key => {
+        if (!globalKeys.includes(key) && key in activeBroker) {
             (activeBroker as any)[key] = (partial as any)[key];
         }
     });
@@ -153,6 +162,11 @@ export function updateState(partial: Partial<TradingState>) {
 export function resetState() {
     state = JSON.parse(JSON.stringify(initialState));
 }
+
+// Helper to hydrate state from storage (needed for Serverless routes)
+// Note: This needs to import loadTradingState, but circular dependency risk.
+// Better practice: do this in the route handler or inject the loader.
+// For now, removing this thought and will handle in routes directly to avoid circular deps.
 
 export function addLog(message: string) {
     const timestamp = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });

@@ -1,8 +1,13 @@
-import { NextResponse } from 'next/server';
-import { getState, updateState, addLog } from '@/lib/state';
-import { saveTradingState } from '@/lib/storage';
+import { getDescription } from '@/lib/regimeEngine'; // redundant but needed for imports
+import { loadTradingState } from '@/lib/storage';
 
 export async function POST() {
+    // 0. Hydrate state logic
+    const persistedState = await loadTradingState();
+    if (persistedState) {
+        updateState(persistedState);
+    }
+
     const state = getState();
     const newKillSwitch = !state.kill_switch;
     updateState({ kill_switch: newKillSwitch });
