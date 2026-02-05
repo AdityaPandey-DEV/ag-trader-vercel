@@ -7,7 +7,7 @@ import { fetchYahooQuotes, transformYahooToOHLCV } from '@/lib/yahooFinance';
 import { calculatePlannedTrade, generateSignal } from '@/lib/strategy';
 import { CONFIG } from '@/lib/config';
 import { isMarketOpen, getMarketInfo } from '@/lib/marketHours';
-import { fetchQuotes, isDhanConfigured, placeOrder, shouldAutoSquareOff, squareOffAll } from '@/lib/dhanApi';
+import { isDhanConfigured, placeOrder, shouldAutoSquareOff, squareOffAll } from '@/lib/dhanApi';
 import {
     getTSDEngineState,
     updateTSDCount,
@@ -173,98 +173,91 @@ export async function POST() {
                     dataSource = 'NO_DATA';
                 }
             }
-        } else if (marketOpen && dhanConfigured && !state.paper_mode) {
-            // LIVE MODE: Real data from Dhan
-            marketData = await fetchQuotes(CONFIG.WATCHLIST);
-            dataSource = 'DHAN_LIVE';
-
-            if (Object.keys(marketData).length === 0) {
-                // Fallback to Yahoo Finance if Dhan fails
-                const yahooData = await fetchYahooQuotes(CONFIG.WATCHLIST);
-                if (Object.keys(yahooData).length > 0) {
-                    marketData = transformYahooToOHLCV(yahooData);
-                    dataSource = 'YAHOO_FINANCE';
-                    addLog('⚠️ Dhan API failed, using Yahoo Finance');
-                } else {
-                    marketData = {};
-                    dataSource = 'NO_DATA';
-                    addLog('⚠️ CRITICAL: All data sources failed - Trading disabled');
-                }
-            }
-        } else if (marketOpen && dhanConfigured && state.paper_mode) {
-            // PAPER MODE: Real prices from Dhan, but simulated trades
-            marketData = await fetchQuotes(CONFIG.WATCHLIST);
-            dataSource = 'DHAN_PAPER';
-
-            if (Object.keys(marketData).length === 0) {
-                const yahooData = await fetchYahooQuotes(CONFIG.WATCHLIST);
-                if (Object.keys(yahooData).length > 0) {
-                    marketData = transformYahooToOHLCV(yahooData);
-                    dataSource = 'YAHOO_FINANCE';
-                } else {
-                    marketData = {};
-                    dataSource = 'NO_DATA';
-                    addLog('⚠️ CRITICAL: All data sources failed - Trading disabled');
-                }
-            }
-        } else if (process.env.UPSTOX_API_KEY) {
-            // UPSTOX LIVE DATA (Always try to fetch if configured, even if market closed)
-            // This ensures we show Real LTP instead of Mock data
-            try {
-                const upstoxData = await fetchUpstoxQuotes(CONFIG.WATCHLIST);
-                if (Object.keys(upstoxData).length > 0) {
-                    marketData = upstoxData;
-                    dataSource = marketOpen ? 'UPSTOX_LIVE' : 'UPSTOX_LTP (MARKET CLOSED)';
-                } else {
-                    // Upstox failed - try Yahoo Finance as backup
-                    const yahooData = await fetchYahooQuotes(CONFIG.WATCHLIST);
-                    if (Object.keys(yahooData).length > 0) {
-                        marketData = transformYahooToOHLCV(yahooData);
-                        dataSource = 'YAHOO_FINANCE';
-                    } else {
-                        // NO MOCK DATA - Return empty and indicate no data available
-                        marketData = {};
-                        dataSource = 'NO_DATA';
-                        addLog('⚠️ CRITICAL: No market data available - Trading disabled');
-                    }
-                }
-            } catch (e) {
-                console.error("Upstox fetch error", e);
-                // Try Yahoo Finance as backup
-                try {
-                    const yahooData = await fetchYahooQuotes(CONFIG.WATCHLIST);
-                    if (Object.keys(yahooData).length > 0) {
-                        marketData = transformYahooToOHLCV(yahooData);
-                        dataSource = 'YAHOO_FINANCE';
-                    } else {
-                        marketData = {};
-                        dataSource = 'NO_DATA';
-                        addLog('⚠️ CRITICAL: No market data available - Trading disabled');
-                    }
-                } catch (yahooError) {
-                    console.error("Yahoo Finance fetch error", yahooError);
-                    marketData = {};
-                    dataSource = 'NO_DATA';
-                    addLog('⚠️ CRITICAL: All data sources failed - Trading disabled');
-                }
-            }
         } else {
-            // No Upstox configured: Try Yahoo Finance first
+            // No Upstox configured or it failed: Try Yahoo Finance as strictly the fallback
+            // We explicitly DO NOT use Dhan for data to avoid costs/API limits as requested
             try {
                 const yahooData = await fetchYahooQuotes(CONFIG.WATCHLIST);
+
+                // transformYahooToOHLCV might return empty if yahooData is empty, so check keys
                 if (Object.keys(yahooData).length > 0) {
                     marketData = transformYahooToOHLCV(yahooData);
                     dataSource = 'YAHOO_FINANCE';
                 } else {
                     marketData = {};
                     dataSource = 'NO_DATA';
-                    addLog('⚠️ CRITICAL: No market data available - Trading disabled');
+                    addLog('⚠️ CRITICAL: Yahoo Finance returned no data');
                 }
             } catch (e) {
                 console.error("Yahoo Finance fetch error", e);
                 marketData = {};
                 dataSource = 'NO_DATA';
                 addLog('⚠️ CRITICAL: Yahoo Finance failed - Trading disabled');
+            }
+        }
+
+        // 1.5 PROCESS PENDING PAPER ORDERS (Simulation Layer)
+        if (state.paper_mode && state.pending_orders?.length > 0) {
+            const pending = state.pending_orders;
+            const remaining: typeof pending = [];
+            const executedIds: string[] = [];
+
+            for (const order of pending) {
+                // LATENCY CHECK: Assume 2s minimum delay (usually 1 tick if interval is 5s)
+                // If tick runs every 5s, any order from previous tick is eligible
+                const LATENCY_THRESHOLD = 2000;
+
+                if (Date.now() - order.createdAt < LATENCY_THRESHOLD) {
+                    remaining.push(order); // Keep waiting
+                    continue;
+                }
+
+                // DATA CHECK
+                const quote = marketData[order.symbol];
+                if (!quote) {
+                    addLog(`⏳ PENDING ${order.symbol}: Waiting for data...`);
+                    remaining.push(order);
+                    continue;
+                }
+
+                // SLIPPAGE SIMULATION (0.00% to 0.05%)
+                // Conservative estimate for liquid stocks
+                const currentPrice = quote.close || quote.lastPrice || order.signalPrice;
+                const slippageBps = Math.random() * 5; // 0-5 basis points
+                const slippageAmt = currentPrice * (slippageBps / 10000);
+
+                const fillPrice = order.side === 'LONG'
+                    ? currentPrice + slippageAmt
+                    : currentPrice - slippageAmt;
+
+                // EXECUTE
+                const position = stateMachine.openPosition({
+                    symbol: order.symbol,
+                    side: order.side,
+                    entry: Number(fillPrice.toFixed(2)), // Realistic fill
+                    current: Number(currentPrice.toFixed(2)),
+                    qty: order.qty,
+                    pnl: 0,
+                    stopLoss: order.stop,
+                    target: order.target,
+                    regime: order.regime
+                });
+
+                if (position) {
+                    const deviation = Math.abs(fillPrice - order.signalPrice).toFixed(2);
+                    addLog(`✅ FILLED ${order.symbol} @ ₹${fillPrice.toFixed(2)} (Slip: ₹${deviation})`);
+                    executedIds.push(order.id);
+                } else {
+                    // If blocked (e.g. max positions), drop order or retry? 
+                    // Usually drop to prevent stale entry.
+                    const reason = stateMachine.canOpenPosition().reason;
+                    addLog(`❌ EXPIRED ${order.symbol}: ${reason}`);
+                }
+            }
+
+            // Update state if we processed any
+            if (executedIds.length > 0) {
+                updateState({ pending_orders: remaining });
             }
         }
 
@@ -335,6 +328,7 @@ export async function POST() {
 
                 if (!preTradeCheck.canTrade) {
                     // Skip this symbol - quality filters failed
+                    // console.log(`Filter blocked ${symbol}: ${preTradeCheck.reasons.join(', ')}`);
                     continue;
                 }
 
@@ -342,6 +336,8 @@ export async function POST() {
                 if (signal) {
                     // Quality score verified above (preTradeCheck.qualityScore)
                     signals.push(signal);
+                } else {
+                    // Log why no signal if needed (verbose)
                 }
             }
 
@@ -373,12 +369,28 @@ export async function POST() {
             }
         }
 
-        // 7. Execute trades on signals (with full risk validation)
+        // 0. PROCESS PENDING PAPER ORDERS (Simulate Latency & Slippage)
+        // This runs BEFORE signal generation to simulate "Next Tick execution"
+        if (state.paper_mode) {
+            const pendingOrders = state.pending_orders || []; // Safety check
+            const remainingOrders: typeof pendingOrders = [];
+
+            for (const order of pendingOrders) {
+                // Check if market data exists for this symbol (using current tick data)
+                // Note: 'marketData' isn't fetched yet in this scope... wait.
+                // We need to move this block AFTER marketData fetch.
+            }
+            // Moving logic down...
+        }
+
+        // ... [OMITTED - MOVED LOGIC DOWN] ...
+
+        // 7. Execute trades on signals (Queuing instead of Instant Fill for Paper)
         if (signals.length > 0 && marketOpen && regimePermissions.tradingFrequency !== 'HALTED') {
             const openPositions = stateMachine.getOpenPositions();
 
-            for (const signal of signals.slice(0, 2)) { // Max 2 trades per tick
-                // Full risk validation
+            for (const signal of signals.slice(0, 2)) {
+                // ... [Start of Risk Check block is same] ...
                 const riskCheck = validateTradeSignal(
                     {
                         symbol: signal.symbol,
@@ -399,9 +411,10 @@ export async function POST() {
                     continue;
                 }
 
-                // AI Confirmation (optional - if configured)
+                // AI Confirmation Logic ...
                 let aiSizeMultiplier = 1.0;
                 if (isAIConfigured()) {
+                    // ... [Same AI Logic] ...
                     const symbolCandles = historicalData[signal.symbol] || [];
                     if (symbolCandles.length >= 10) {
                         const aiResult = await getCachedAnalysis(signal.symbol, symbolCandles);
@@ -410,16 +423,13 @@ export async function POST() {
                         if (conflict.resolution === 'SKIP') {
                             addLog(`🤖 AI SKIP: ${signal.symbol} - ${conflict.reason}`);
                             continue;
-                        }
-
-                        if (conflict.resolution === 'REDUCE_SIZE') {
-                            aiSizeMultiplier = 0.5; // Reduce size by half
-                            addLog(`🤖 AI CAUTION: ${signal.symbol} - size reduced`);
+                        } else if (conflict.resolution === 'REDUCE_SIZE') {
+                            aiSizeMultiplier = 0.5;
                         }
                     }
                 }
 
-                // Calculate position size (regime-adjusted + AI-adjusted)
+                // Calculate Size
                 let qty = riskCheck.adjustedSize || calculateSafePositionSize(
                     signal,
                     state.initial_capital,
@@ -428,24 +438,29 @@ export async function POST() {
                 qty = Math.floor(qty * aiSizeMultiplier);
 
                 if (state.paper_mode) {
-                    // Paper trade: Add to state machine
-                    const position = stateMachine.openPosition({
+                    // REALISTIC PAPER TRADING: QUEUE ORDER (Latency Simulation)
+                    // Do NOT execute immediately. Push to pending queue.
+                    const newOrder = {
+                        id: `ORD_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
                         symbol: signal.symbol,
                         side: signal.side,
-                        entry: signal.entry,
-                        current: signal.entry,
                         qty,
-                        pnl: 0,
-                        stopLoss: signal.stop,
+                        signalPrice: signal.entry,
                         target: signal.target,
-                        regime: regimeResult.newRegime
-                    });
+                        stop: signal.stop,
+                        regime: regimeResult.newRegime,
+                        createdAt: Date.now()
+                    };
 
-                    if (position) {
-                        addLog(`📝 PAPER ${signal.side} ${signal.symbol} @ ₹${signal.entry} (Qty: ${qty}) [${regimeResult.newRegime}]`);
-                    }
+                    // Add to state (will be validated next tick)
+                    // We need to update state manually here as 'state' var is local snapshot
+                    const currentPending = state.pending_orders || [];
+                    updateState({ pending_orders: [...currentPending, newOrder] });
+
+                    addLog(`⏳ QUEUED PAPER ${signal.side} ${signal.symbol} @ ₹${signal.entry} (Simulating Latency...)`);
+
                 } else {
-                    // LIVE trade: Execute through Dhan
+                    // LIVE trade: Execute through Dhan (Instant API Call)
                     const orderSide = signal.side === 'LONG' ? 'BUY' : 'SELL';
                     const order = await placeOrder(signal.symbol, orderSide, qty, 'MARKET', undefined, false);
 
@@ -453,7 +468,7 @@ export async function POST() {
                         const position = stateMachine.openPosition({
                             symbol: signal.symbol,
                             side: signal.side,
-                            entry: signal.entry,
+                            entry: signal.entry, // For Live, assume fill approx entry or wait for webhook
                             current: signal.entry,
                             qty,
                             pnl: 0,
@@ -463,7 +478,7 @@ export async function POST() {
                         });
 
                         if (position) {
-                            addLog(`🔥 LIVE ${signal.side} ${signal.symbol} @ ₹${signal.entry} (Order: ${order.orderId}) [${regimeResult.newRegime}]`);
+                            addLog(`🔥 LIVE ${signal.side} ${signal.symbol} @ ₹${signal.entry} (Order: ${order.orderId})`);
                         }
                     }
                 }

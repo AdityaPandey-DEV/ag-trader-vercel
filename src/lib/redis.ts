@@ -58,10 +58,30 @@ export async function saveToken(token: string, key: string = UPSTOX_TOKEN_KEY): 
     if (!client) return false;
 
     try {
-        const expiry = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
-        await client.set(key, token, { ex: 86400 }); // 24h TTL
-        await client.set(`${key}:expiry`, expiry.toString(), { ex: 86400 });
-        console.log(`💾 Saved token to Redis: ${key}`);
+        // Calculate seconds until midnight IST (Internet Standard Time UTC+5:30)
+        // India is UTC+5:30.
+        // Current UTC time
+        const now = new Date();
+        const currentUtc = now.getTime();
+
+        // Target: Next midnight IST
+        // 1. Get current time in IST
+        const istOffset = 5.5 * 60 * 60 * 1000;
+        const currentIstTime = new Date(currentUtc + istOffset);
+
+        // 2. Set to next midnight (User's local time might be different, but we enforce IST midnight for Indian market)
+        const nextMidnightIst = new Date(currentIstTime);
+        nextMidnightIst.setUTCHours(24, 0, 0, 0); // Sets to 00:00:00 of next day
+
+        // 3. Diff in milliseconds
+        const timeUntilMidnight = nextMidnightIst.getTime() - currentIstTime.getTime();
+
+        // 4. Convert to seconds for Redis (ensure at least 60s to avoid instant expiry issues)
+        const ttlSeconds = Math.max(60, Math.floor(timeUntilMidnight / 1000));
+
+        await client.set(key, token, { ex: ttlSeconds });
+        await client.set(`${key}:expiry`, (Date.now() + timeUntilMidnight).toString(), { ex: ttlSeconds });
+        console.log(`💾 Saved token to Redis: ${key} (Expires in ${(ttlSeconds / 3600).toFixed(2)}h at Midnight IST)`);
         return true;
     } catch (e) {
         console.error('Redis save error:', e);

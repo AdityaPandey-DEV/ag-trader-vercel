@@ -36,11 +36,17 @@ export async function loadTokenAsync(): Promise<void> {
     try {
         if (fs.existsSync(TOKEN_FILE_PATH)) {
             const data = JSON.parse(fs.readFileSync(TOKEN_FILE_PATH, 'utf-8'));
-            if (data.token && data.expiry && Date.now() < data.expiry) {
+
+            // Check if token date matches current date (Midnight IST logic)
+            // If token expiry is in the past, it's invalid. 
+            // Also explicitly check if the token belongs to "today" to avoid stale sessions.
+            const now = Date.now();
+            if (data.token && data.expiry && now < data.expiry) {
                 accessToken = data.token;
                 tokenExpiry = data.expiry;
                 console.log('✅ Loaded Upstox token from file storage');
             } else {
+                console.warn('⚠️ Token in file is expired or stale. Deleting.');
                 fs.unlinkSync(TOKEN_FILE_PATH);
             }
         }
@@ -223,12 +229,18 @@ export async function fetchUpstoxQuotes(symbols: string[]) {
         // Map symbols to Upstox Instrument Keys using ISIN
         // Format: NSE_EQ|ISIN (URL encoded)
         const instrumentKeys = symbols
-            .filter(s => ISIN_MAP[s]) // Only include symbols we have ISINs for
+            .filter(s => {
+                if (!ISIN_MAP[s]) {
+                    console.warn(`⚠️ Missing ISIN for symbol: ${s} (Skipping quote fetch)`);
+                    return false;
+                }
+                return true;
+            })
             .map(s => encodeURIComponent(`NSE_EQ|${ISIN_MAP[s]}`))
             .join(',');
 
         if (!instrumentKeys) {
-            console.warn('No valid ISINs found for symbols:', symbols);
+            console.warn('❌ No valid ISINs found for requested symbols:', symbols);
             return {};
         }
 

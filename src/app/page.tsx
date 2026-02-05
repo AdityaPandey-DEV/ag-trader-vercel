@@ -509,12 +509,14 @@ export default function Dashboard() {
 
       <div className="footer-control" style={{ marginTop: '2rem', display: 'flex', justifyContent: 'center' }}>
         <button
-          className={`primary-btn ${data.kill_switch ? 'danger' : ''}`}
+          className={`primary-btn ${data.kill_switch ? '' : 'danger'}`}
           onClick={toggleKillSwitch}
-          style={{ width: '200px' }}
+          style={{ width: '300px', background: data.kill_switch ? '#10b981' : '#ef4444' }}
         >
           <Power size={18} style={{ marginRight: '8px' }} />
-          {data.kill_switch ? 'RESUME TRADING' : 'EMERGENCY STOP'}
+          {data.kill_switch
+            ? `RESUME ${data.broker_mode || 'PAPER'} TRADING`
+            : `STOP ${data.broker_mode || 'PAPER'} TRADING`}
         </button>
       </div>
     </div>

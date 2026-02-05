@@ -24,6 +24,19 @@ export interface PlannedTrade {
 
 export type BrokerMode = 'PAPER' | 'DHAN' | 'UPSTOX';
 
+// Queue system for realistic paper trading latency
+export interface PendingOrder {
+    id: string;
+    symbol: string;
+    side: 'LONG' | 'SHORT';
+    qty: number;
+    signalPrice: number;
+    target: number;
+    stop: number;
+    regime: string;
+    createdAt: number;
+}
+
 // 1. Broker-Specific State (The "Virtual Environment")
 export interface BrokerState {
     pnl: number;
@@ -33,6 +46,7 @@ export interface BrokerState {
     initial_capital: number;
     positions: Position[];
     planned_trades: PlannedTrade[];
+    pending_orders: PendingOrder[]; // Realistic latency queue
     equity_history: Array<{ time: string; equity: number }>;
     kill_switch: boolean;
     logs: string[]; // Isolated logs
@@ -76,8 +90,9 @@ const defaultBrokerState: BrokerState = {
     initial_capital: 0,
     positions: [],
     planned_trades: [],
+    pending_orders: [],
     equity_history: [],
-    kill_switch: false,
+    kill_switch: true,
     logs: ['[SYSTEM] Algo Trader Engine initialized.']
 };
 
