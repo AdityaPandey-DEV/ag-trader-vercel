@@ -203,51 +203,57 @@ export async function POST() {
             const executedIds: string[] = [];
 
             for (const order of pending) {
-                // LATENCY CHECK: Assume 2s minimum delay
-                const LATENCY_THRESHOLD = 2000;
+                try {
+                    // LATENCY CHECK: Assume 2s minimum delay
+                    const LATENCY_THRESHOLD = 2000;
 
-                if (Date.now() - order.createdAt < LATENCY_THRESHOLD) {
-                    remaining.push(order); // Keep waiting
-                    continue;
-                }
+                    if (Date.now() - order.createdAt < LATENCY_THRESHOLD) {
+                        remaining.push(order); // Keep waiting
+                        continue;
+                    }
 
-                // DATA CHECK
-                const quote = marketData[order.symbol];
-                if (!quote) {
-                    // addLog(`⏳ PENDING ${order.symbol}: Waiting for data...`); // Reduced spam
-                    remaining.push(order);
-                    continue;
-                }
+                    // DATA CHECK
+                    const quote = marketData[order.symbol];
+                    if (!quote) {
+                        remaining.push(order);
+                        continue;
+                    }
 
-                // SLIPPAGE SIMULATION (0.00% to 0.05%)
-                const currentPrice = quote.close || quote.lastPrice || order.signalPrice;
-                const slippageBps = Math.random() * 5; // 0-5 basis points
-                const slippageAmt = currentPrice * (slippageBps / 10000);
+                    // SLIPPAGE SIMULATION (0.00% to 0.05%)
+                    const currentPrice = quote.close || quote.lastPrice || order.signalPrice;
+                    const slippageBps = Math.random() * 5; // 0-5 basis points
+                    const slippageAmt = currentPrice * (slippageBps / 10000);
 
-                const fillPrice = order.side === 'LONG'
-                    ? currentPrice + slippageAmt
-                    : currentPrice - slippageAmt;
+                    const fillPrice = order.side === 'LONG'
+                        ? currentPrice + slippageAmt
+                        : currentPrice - slippageAmt;
 
-                // EXECUTE
-                const position = stateMachine.openPosition({
-                    symbol: order.symbol,
-                    side: order.side,
-                    entry: Number(fillPrice.toFixed(2)),
-                    current: Number(currentPrice.toFixed(2)),
-                    qty: order.qty,
-                    pnl: 0,
-                    stopLoss: order.stop,
-                    target: order.target,
-                    regime: order.regime
-                });
+                    // EXECUTE
+                    const position = stateMachine.openPosition({
+                        symbol: order.symbol,
+                        side: order.side,
+                        entry: Number(fillPrice.toFixed(2)),
+                        current: Number(currentPrice.toFixed(2)),
+                        qty: order.qty,
+                        pnl: 0,
+                        stopLoss: order.stop,
+                        target: order.target,
+                        regime: order.regime
+                    });
 
-                if (position) {
-                    const deviation = Math.abs(fillPrice - order.signalPrice).toFixed(2);
-                    addLog(`✅ FILLED ${order.symbol} @ ₹${fillPrice.toFixed(2)} (Slip: ₹${deviation})`);
-                    executedIds.push(order.id);
-                } else {
-                    const reason = stateMachine.canOpenPosition().reason;
-                    addLog(`❌ EXPIRED ${order.symbol}: ${reason}`);
+                    if (position) {
+                        const deviation = Math.abs(fillPrice - order.signalPrice).toFixed(2);
+                        addLog(`✅ FILLED ${order.symbol} @ ₹${fillPrice.toFixed(2)} (Slip: ₹${deviation})`);
+                        executedIds.push(order.id);
+                    } else {
+                        const reason = stateMachine.canOpenPosition().reason;
+                        addLog(`❌ EXPIRED ${order.symbol}: ${reason}`);
+                    }
+                } catch (err) {
+                    console.error(`Pending order failed for ${order.symbol}`, err);
+                    addLog(`❌ ORDER ERROR ${order.symbol}: ${err}`);
+                    // Don't discard, maybe try again? Or discard to prevent block?
+                    // For safety, let's discard so we don't loop forever on a bad order
                 }
             }
 
@@ -255,7 +261,7 @@ export async function POST() {
             if (executedIds.length > 0) {
                 updateState({ pending_orders: remaining });
             }
-        }
+        } // End of PAPER check
 
         // 2. Update historical data for indicators
         for (const symbol of CONFIG.WATCHLIST) {
@@ -301,53 +307,56 @@ export async function POST() {
             tsd_count: regimeResult.newTSDCount
         });
 
+
+
         // 5. Calculate planned trades for each symbol
         const plannedTrades: any[] = [];
         const signals: any[] = [];
 
         for (const symbol of CONFIG.WATCHLIST) {
-            const data = marketData[symbol];
-            if (!data) continue;
+            try {
+                const data = marketData[symbol];
+                if (!data) continue;
 
-            const priorData = getPriorData(symbol);
-            const levels = calculateLevels(data, historicalData[symbol]);
+                const priorData = getPriorData(symbol);
+                const levels = calculateLevels(data, historicalData[symbol]);
 
-            // Get potential entry levels for display
-            const trades = calculatePlannedTrade(data, levels.support, levels.resistance);
-            plannedTrades.push(...trades);
+                // Get potential entry levels for display
+                const trades = calculatePlannedTrade(data, levels.support, levels.resistance);
+                plannedTrades.push(...trades);
 
-            // Check for actionable signals (only during market hours with real data)
-            if (marketOpen && (dataSource.includes('DHAN') || dataSource.includes('UPSTOX')) && regimePermissions.allowMeanReversion) {
-                // Run pre-trade quality filters (Upgrades #2, #3, #7)
-                const symbolCandles = historicalData[symbol] || [];
-                const preTradeCheck = runPreTradeChecks(symbolCandles);
+                // Check for actionable signals (only during market hours with real data)
+                if (marketOpen && (dataSource.includes('DHAN') || dataSource.includes('UPSTOX')) && regimePermissions.allowMeanReversion) {
+                    // Run pre-trade quality filters (Upgrades #2, #3, #7)
+                    const symbolCandles = historicalData[symbol] || [];
+                    const preTradeCheck = runPreTradeChecks(symbolCandles);
 
-                if (!preTradeCheck.canTrade) {
-                    // Skip this symbol - quality filters failed
-                    // console.log(`Filter blocked ${symbol}: ${preTradeCheck.reasons.join(', ')}`);
-                    continue;
+                    if (!preTradeCheck.canTrade) {
+                        continue;
+                    }
+
+                    const signal = generateSignal(data, priorData, levels.support, levels.resistance, regimeResult.newRegime);
+                    if (signal) {
+                        // Quality score verified above (preTradeCheck.qualityScore)
+                        signals.push(signal);
+                    }
                 }
 
-                const signal = generateSignal(data, priorData, levels.support, levels.resistance, regimeResult.newRegime);
-                if (signal) {
-                    // Quality score verified above (preTradeCheck.qualityScore)
-                    signals.push(signal);
-                } else {
-                    // Log why no signal if needed (verbose)
+                // Update trailing stops for active positions (Upgrade #5)
+                const trailingResult = updateTrailingStop(symbol, historicalData[symbol] || []);
+                if (trailingResult.stopped) {
+                    addLog(`🎯 TRAIL EXIT ${symbol}: PnL ₹${trailingResult.pnl.toFixed(2)}`);
+                    // Record trade in risk engine
+                    const rMultiple = trailingResult.pnl / (state.initial_capital * RISK_CONFIG.MAX_RISK_PER_TRADE);
+                    recordTradeRisk(trailingResult.pnl, rMultiple);
                 }
-            }
-
-            // Update trailing stops for active positions (Upgrade #5)
-            const trailingResult = updateTrailingStop(symbol, historicalData[symbol] || []);
-            if (trailingResult.stopped) {
-                addLog(`🎯 TRAIL EXIT ${symbol}: PnL ₹${trailingResult.pnl.toFixed(2)}`);
-                // Record trade in risk engine
-                const rMultiple = trailingResult.pnl / (state.initial_capital * RISK_CONFIG.MAX_RISK_PER_TRADE);
-                recordTradeRisk(trailingResult.pnl, rMultiple);
+            } catch (err) {
+                console.error(`Signal generation failed for ${symbol}`, err);
+                // Don't log to prevent spam, just skip this symbol for this tick
             }
         }
 
-        // 6. Update positions prices and check exits
+        // 6. Update positions prices and check exits (MOVED HERE)
         const priceMap: Record<string, number> = {};
         for (const symbol of CONFIG.WATCHLIST) {
             const data = marketData[symbol];
@@ -365,121 +374,133 @@ export async function POST() {
             }
         }
 
-
-
-        // ... [OMITTED - MOVED LOGIC DOWN] ...
-
         // 7. Execute trades on signals (Queuing instead of Instant Fill for Paper)
         if (signals.length > 0 && marketOpen && regimePermissions.tradingFrequency !== 'HALTED') {
             const openPositions = stateMachine.getOpenPositions();
 
+            // Limit to 2 signals processed per tick to avoid overwhelm
             for (const signal of signals.slice(0, 2)) {
-                // ... [Start of Risk Check block is same] ...
-                const riskCheck = validateTradeSignal(
-                    {
-                        symbol: signal.symbol,
-                        side: signal.side,
-                        entry: signal.entry,
-                        stop: signal.stop,
-                        target: signal.target
-                    },
-                    state.initial_capital,
-                    state.pnl,
-                    regimeResult.newRegime,
-                    openPositions
-                );
-
-                if (!riskCheck.passed) {
-                    const failedChecks = riskCheck.checks.filter(c => !c.passed).map(c => c.name);
-                    addLog(`⚠️ BLOCKED ${signal.symbol}: ${failedChecks.join(', ')}`);
-                    continue;
-                }
-
-                // AI Confirmation Logic ...
-                let aiSizeMultiplier = 1.0;
-                if (isAIConfigured()) {
-                    // ... [Same AI Logic] ...
-                    const symbolCandles = historicalData[signal.symbol] || [];
-                    if (symbolCandles.length >= 10) {
-                        const aiResult = await getCachedAnalysis(signal.symbol, symbolCandles);
-                        const conflict = resolveConflict(signal.side, aiResult, regimeResult.newRegime);
-
-                        if (conflict.resolution === 'SKIP') {
-                            addLog(`🤖 AI SKIP: ${signal.symbol} - ${conflict.reason}`);
-                            continue;
-                        } else if (conflict.resolution === 'REDUCE_SIZE') {
-                            aiSizeMultiplier = 0.5;
-                        }
-                    }
-                }
-
-                // Calculate Size
-                let qty = riskCheck.adjustedSize || calculateSafePositionSize(
-                    signal,
-                    state.initial_capital,
-                    regimeResult.newRegime
-                );
-                qty = Math.floor(qty * aiSizeMultiplier);
-
-                // BROKER EXECUTION ROUTING
-                switch (state.broker_mode) {
-                    case 'PAPER':
-                        // REALISTIC PAPER TRADING: QUEUE ORDER (Latency Simulation)
-                        const newOrder = {
-                            id: `ORD_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+                try {
+                    // Risk Gate Check
+                    const riskCheck = validateTradeSignal(
+                        {
                             symbol: signal.symbol,
                             side: signal.side,
-                            qty,
-                            signalPrice: signal.entry,
-                            target: signal.target,
+                            entry: signal.entry,
                             stop: signal.stop,
-                            regime: regimeResult.newRegime,
-                            createdAt: Date.now()
-                        };
+                            target: signal.target
+                        },
+                        state.initial_capital,
+                        state.pnl,
+                        regimeResult.newRegime,
+                        openPositions
+                    );
 
-                        const currentPending = state.pending_orders || [];
-                        updateState({ pending_orders: [...currentPending, newOrder] });
-                        addLog(`⏳ QUEUED PAPER ${signal.side} ${signal.symbol} @ ₹${signal.entry} (Simulating Latency...)`);
-                        break;
+                    if (!riskCheck.passed) {
+                        const failedChecks = riskCheck.checks.filter(c => !c.passed).map(c => c.name);
+                        addLog(`⚠️ BLOCKED ${signal.symbol}: ${failedChecks.join(', ')}`);
+                        continue;
+                    }
 
-                    case 'DHAN':
-                        // LIVE trade: Execute through Dhan API
-                        try {
-                            const orderSide = signal.side === 'LONG' ? 'BUY' : 'SELL';
-                            const order = await placeOrder(signal.symbol, orderSide, qty, 'MARKET', undefined, false);
+                    // AI Confirmation Logic
+                    let aiSizeMultiplier = 1.0;
+                    if (isAIConfigured()) {
+                        const symbolCandles = historicalData[signal.symbol] || [];
+                        if (symbolCandles.length >= 10) {
+                            const aiResult = await getCachedAnalysis(signal.symbol, symbolCandles);
+                            const conflict = resolveConflict(signal.side, aiResult, regimeResult.newRegime);
 
-                            if (order) {
-                                const position = stateMachine.openPosition({
-                                    symbol: signal.symbol,
-                                    side: signal.side,
-                                    entry: signal.entry,
-                                    current: signal.entry,
-                                    qty,
-                                    pnl: 0,
-                                    stopLoss: signal.stop,
-                                    target: signal.target,
-                                    regime: regimeResult.newRegime
-                                });
-
-                                if (position) {
-                                    addLog(`🔥 LIVE DHAN ${signal.side} ${signal.symbol} @ ₹${signal.entry} (Order: ${order.orderId})`);
-                                }
+                            if (conflict.resolution === 'SKIP') {
+                                addLog(`🤖 AI SKIP: ${signal.symbol} - ${conflict.reason}`);
+                                continue;
+                            } else if (conflict.resolution === 'REDUCE_SIZE') {
+                                aiSizeMultiplier = 0.5;
                             }
-                        } catch (err) {
-                            addLog(`❌ DHAN ORDER FAILED: ${err}`);
                         }
-                        break;
+                    }
 
-                    case 'UPSTOX':
-                        // Placeholder for Future Upstox Execution
-                        addLog(`⚠️ Upstox execution not yet implemented. Signal ignored.`);
-                        break;
+                    // Calculate Size
+                    let qty = riskCheck.adjustedSize || calculateSafePositionSize(
+                        signal,
+                        state.initial_capital,
+                        regimeResult.newRegime
+                    );
+                    qty = Math.floor(qty * aiSizeMultiplier);
+
+                    if (qty <= 0) {
+                        addLog(`⚠️ QTY 0 for ${signal.symbol} - Skipping`);
+                        continue;
+                    }
+
+                    // BROKER EXECUTION ROUTING
+                    switch (state.broker_mode) {
+                        case 'PAPER':
+                            // REALISTIC PAPER TRADING: QUEUE ORDER (Latency Simulation)
+                            const newOrder = {
+                                id: `ORD_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+                                symbol: signal.symbol,
+                                side: signal.side,
+                                qty,
+                                signalPrice: signal.entry,
+                                target: signal.target,
+                                stop: signal.stop,
+                                regime: regimeResult.newRegime,
+                                createdAt: Date.now()
+                            };
+
+                            const currentPending = state.pending_orders || [];
+                            updateState({ pending_orders: [...currentPending, newOrder] });
+                            addLog(`⏳ QUEUED PAPER ${signal.side} ${signal.symbol} @ ₹${signal.entry} (Simulating Latency...)`);
+                            break;
+
+                        case 'DHAN':
+                            // LIVE trade: Execute through Dhan API
+                            try {
+                                const orderSide = signal.side === 'LONG' ? 'BUY' : 'SELL';
+                                // market order for now
+                                const order = await placeOrder(signal.symbol, orderSide, qty, 'MARKET', undefined, false);
+
+                                if (order) {
+                                    const position = stateMachine.openPosition({
+                                        symbol: signal.symbol,
+                                        side: signal.side,
+                                        entry: signal.entry,
+                                        current: signal.entry,
+                                        qty,
+                                        pnl: 0,
+                                        stopLoss: signal.stop,
+                                        target: signal.target,
+                                        regime: regimeResult.newRegime
+                                    });
+
+                                    if (position) {
+                                        addLog(`🔥 LIVE DHAN ${signal.side} ${signal.symbol} @ ₹${signal.entry} (Order: ${order.orderId})`);
+                                    }
+                                } else {
+                                    addLog(`❌ DHAN API returned null order`);
+                                }
+                            } catch (err) {
+                                addLog(`❌ DHAN ORDER FAILED: ${err}`);
+                            }
+                            break;
+
+                        case 'UPSTOX':
+                            // Placeholder for Future Upstox Execution
+                            addLog(`⚠️ Upstox execution not yet implemented. Signal ignored.`);
+                            break;
+                    }
+                } catch (signalErr) {
+                    console.error(`Execution failed for ${signal.symbol}`, signalErr);
+                    addLog(`❌ EXECUTION ERROR ${signal.symbol}: ${signalErr}`);
                 }
             }
         }
 
         // 8. Update prior data for next tick
-        updatePriorData(marketData);
+        try {
+            updatePriorData(marketData);
+        } catch (e) { console.error("UpdatePriorData failed", e); }
+
 
         // 9. Calculate PnL from state machine positions
         const managedPositions = stateMachine.getOpenPositions();
@@ -495,7 +516,7 @@ export async function POST() {
             pnl: p.pnl
         }));
 
-        const riskConsumed = Math.abs(totalPnl) / state.initial_capital * 100;
+        const riskConsumed = Math.abs(totalPnl) / (state.initial_capital || 100000) * 100;
 
         // 10. Get state machine summary
         const stateSummary = stateMachine.getStateSummary();
@@ -512,19 +533,25 @@ export async function POST() {
         });
 
         // 12. Update equity curve
-        updateEquity();
+        try {
+            updateEquity();
+        } catch (e) { console.error("UpdateEquity failed", e); }
+
 
         // 13. Persist data periodically (every 10 ticks)
         const now = Date.now();
         if (now % 10 === 0) {
-            // Note: fire and forget to avoid blocking response? 
-            // Better to await to ensure consistency on serverless
-            await saveTradingState(getState());
-            await saveRegimeState(exportRegimeState());
-            await saveHistoricalData(historicalData);
+            try {
+                await saveTradingState(getState());
+                await saveRegimeState(exportRegimeState());
+                await saveHistoricalData(historicalData);
+            } catch (pErr) {
+                console.error("Persistence failed", pErr);
+                addLog(`⚠️ State Save Failed: ${pErr}`);
+            }
         }
 
-        // 14. Log activity (less frequently to avoid spam)
+        // 14. Log activity
         if (plannedTrades.length > 0 && now % 30000 < 5000) { // Roughly every 30s
             const longCount = plannedTrades.filter(t => t.side === 'LONG').length;
             const shortCount = plannedTrades.filter(t => t.side === 'SHORT').length;
@@ -549,9 +576,9 @@ export async function POST() {
         addLog(`ERROR: ${e}`);
         return NextResponse.json({ status: 'error', message: String(e) }, { status: 500 });
     }
+
 }
 
-// Also allow GET for easy testing
 export async function GET() {
     return POST();
 }
