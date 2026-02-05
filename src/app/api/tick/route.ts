@@ -127,7 +127,7 @@ export async function POST() {
             const openPositions = stateMachine.getOpenPositions();
             if (openPositions.length > 0) {
                 addLog('⏰ AUTO SQUARE-OFF TIME REACHED');
-                const result = await squareOffAll('Market close approaching', state.paper_mode);
+                const result = await squareOffAll('Market close approaching', state.broker_mode === 'PAPER');
                 addLog(`📊 Squared off ${result.closedCount} positions`);
 
                 // Close positions in state machine
@@ -196,15 +196,14 @@ export async function POST() {
             }
         }
 
-        // 1.5 PROCESS PENDING PAPER ORDERS (Simulation Layer)
-        if (state.paper_mode && state.pending_orders?.length > 0) {
+        // 1.5 PROCESS PENDING ORDERS (BROKER: PAPER)
+        if (state.broker_mode === 'PAPER' && state.pending_orders?.length > 0) {
             const pending = state.pending_orders;
             const remaining: typeof pending = [];
             const executedIds: string[] = [];
 
             for (const order of pending) {
-                // LATENCY CHECK: Assume 2s minimum delay (usually 1 tick if interval is 5s)
-                // If tick runs every 5s, any order from previous tick is eligible
+                // LATENCY CHECK: Assume 2s minimum delay
                 const LATENCY_THRESHOLD = 2000;
 
                 if (Date.now() - order.createdAt < LATENCY_THRESHOLD) {
@@ -215,13 +214,12 @@ export async function POST() {
                 // DATA CHECK
                 const quote = marketData[order.symbol];
                 if (!quote) {
-                    addLog(`⏳ PENDING ${order.symbol}: Waiting for data...`);
+                    // addLog(`⏳ PENDING ${order.symbol}: Waiting for data...`); // Reduced spam
                     remaining.push(order);
                     continue;
                 }
 
                 // SLIPPAGE SIMULATION (0.00% to 0.05%)
-                // Conservative estimate for liquid stocks
                 const currentPrice = quote.close || quote.lastPrice || order.signalPrice;
                 const slippageBps = Math.random() * 5; // 0-5 basis points
                 const slippageAmt = currentPrice * (slippageBps / 10000);
@@ -234,7 +232,7 @@ export async function POST() {
                 const position = stateMachine.openPosition({
                     symbol: order.symbol,
                     side: order.side,
-                    entry: Number(fillPrice.toFixed(2)), // Realistic fill
+                    entry: Number(fillPrice.toFixed(2)),
                     current: Number(currentPrice.toFixed(2)),
                     qty: order.qty,
                     pnl: 0,
@@ -248,8 +246,6 @@ export async function POST() {
                     addLog(`✅ FILLED ${order.symbol} @ ₹${fillPrice.toFixed(2)} (Slip: ₹${deviation})`);
                     executedIds.push(order.id);
                 } else {
-                    // If blocked (e.g. max positions), drop order or retry? 
-                    // Usually drop to prevent stale entry.
                     const reason = stateMachine.canOpenPosition().reason;
                     addLog(`❌ EXPIRED ${order.symbol}: ${reason}`);
                 }
@@ -369,19 +365,7 @@ export async function POST() {
             }
         }
 
-        // 0. PROCESS PENDING PAPER ORDERS (Simulate Latency & Slippage)
-        // This runs BEFORE signal generation to simulate "Next Tick execution"
-        if (state.paper_mode) {
-            const pendingOrders = state.pending_orders || []; // Safety check
-            const remainingOrders: typeof pendingOrders = [];
 
-            for (const order of pendingOrders) {
-                // Check if market data exists for this symbol (using current tick data)
-                // Note: 'marketData' isn't fetched yet in this scope... wait.
-                // We need to move this block AFTER marketData fetch.
-            }
-            // Moving logic down...
-        }
 
         // ... [OMITTED - MOVED LOGIC DOWN] ...
 
@@ -437,50 +421,59 @@ export async function POST() {
                 );
                 qty = Math.floor(qty * aiSizeMultiplier);
 
-                if (state.paper_mode) {
-                    // REALISTIC PAPER TRADING: QUEUE ORDER (Latency Simulation)
-                    // Do NOT execute immediately. Push to pending queue.
-                    const newOrder = {
-                        id: `ORD_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-                        symbol: signal.symbol,
-                        side: signal.side,
-                        qty,
-                        signalPrice: signal.entry,
-                        target: signal.target,
-                        stop: signal.stop,
-                        regime: regimeResult.newRegime,
-                        createdAt: Date.now()
-                    };
-
-                    // Add to state (will be validated next tick)
-                    // We need to update state manually here as 'state' var is local snapshot
-                    const currentPending = state.pending_orders || [];
-                    updateState({ pending_orders: [...currentPending, newOrder] });
-
-                    addLog(`⏳ QUEUED PAPER ${signal.side} ${signal.symbol} @ ₹${signal.entry} (Simulating Latency...)`);
-
-                } else {
-                    // LIVE trade: Execute through Dhan (Instant API Call)
-                    const orderSide = signal.side === 'LONG' ? 'BUY' : 'SELL';
-                    const order = await placeOrder(signal.symbol, orderSide, qty, 'MARKET', undefined, false);
-
-                    if (order) {
-                        const position = stateMachine.openPosition({
+                // BROKER EXECUTION ROUTING
+                switch (state.broker_mode) {
+                    case 'PAPER':
+                        // REALISTIC PAPER TRADING: QUEUE ORDER (Latency Simulation)
+                        const newOrder = {
+                            id: `ORD_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
                             symbol: signal.symbol,
                             side: signal.side,
-                            entry: signal.entry, // For Live, assume fill approx entry or wait for webhook
-                            current: signal.entry,
                             qty,
-                            pnl: 0,
-                            stopLoss: signal.stop,
+                            signalPrice: signal.entry,
                             target: signal.target,
-                            regime: regimeResult.newRegime
-                        });
+                            stop: signal.stop,
+                            regime: regimeResult.newRegime,
+                            createdAt: Date.now()
+                        };
 
-                        if (position) {
-                            addLog(`🔥 LIVE ${signal.side} ${signal.symbol} @ ₹${signal.entry} (Order: ${order.orderId})`);
+                        const currentPending = state.pending_orders || [];
+                        updateState({ pending_orders: [...currentPending, newOrder] });
+                        addLog(`⏳ QUEUED PAPER ${signal.side} ${signal.symbol} @ ₹${signal.entry} (Simulating Latency...)`);
+                        break;
+
+                    case 'DHAN':
+                        // LIVE trade: Execute through Dhan API
+                        try {
+                            const orderSide = signal.side === 'LONG' ? 'BUY' : 'SELL';
+                            const order = await placeOrder(signal.symbol, orderSide, qty, 'MARKET', undefined, false);
+
+                            if (order) {
+                                const position = stateMachine.openPosition({
+                                    symbol: signal.symbol,
+                                    side: signal.side,
+                                    entry: signal.entry,
+                                    current: signal.entry,
+                                    qty,
+                                    pnl: 0,
+                                    stopLoss: signal.stop,
+                                    target: signal.target,
+                                    regime: regimeResult.newRegime
+                                });
+
+                                if (position) {
+                                    addLog(`🔥 LIVE DHAN ${signal.side} ${signal.symbol} @ ₹${signal.entry} (Order: ${order.orderId})`);
+                                }
+                            }
+                        } catch (err) {
+                            addLog(`❌ DHAN ORDER FAILED: ${err}`);
                         }
-                    }
+                        break;
+
+                    case 'UPSTOX':
+                        // Placeholder for Future Upstox Execution
+                        addLog(`⚠️ Upstox execution not yet implemented. Signal ignored.`);
+                        break;
                 }
             }
         }

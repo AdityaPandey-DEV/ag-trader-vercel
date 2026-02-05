@@ -11,12 +11,7 @@ interface OHLCV {
 }
 
 // Base prices for each symbol (approx real values)
-const BASE_PRICES: Record<string, number> = {
-    RELIANCE: 2950, TCS: 4200, INFY: 1850, HDFCBANK: 1720, ICICIBANK: 1250,
-    SBIN: 820, AXISBANK: 1180, BHARTIARTL: 1650, ITC: 480, LT: 3650,
-    KOTAKBANK: 1850, WIPRO: 560, MARUTI: 12500, TITAN: 3750, SUNPHARMA: 1850,
-    BAJFINANCE: 7200, NESTLEIND: 2450, ADANIENT: 2950, TATASTEEL: 155, POWERGRID: 320
-};
+
 
 // Cache to maintain price continuity
 const priceCache: Record<string, number> = {};
