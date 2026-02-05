@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getState, updateState, addLog, updateEquity } from '@/lib/state';
 import { loadTradingState } from '@/lib/storage';
 import { fetchUpstoxQuotes, getUpstoxLoginUrl } from '@/lib/upstoxApi';
-import { generateMockData, getPriorData, updatePriorData, calculateLevels } from '@/lib/mockData';
+import { getPriorData, updatePriorData, calculateLevels } from '@/lib/marketUtils';
 import { fetchYahooQuotes, transformYahooToOHLCV } from '@/lib/yahooFinance';
 import { calculatePlannedTrade, generateSignal } from '@/lib/strategy';
 import { CONFIG } from '@/lib/config';
